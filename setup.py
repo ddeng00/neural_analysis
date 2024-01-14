@@ -8,6 +8,7 @@ setup(
     description="Collection of neural analysis tools",
     url="https://github.com/ddeng00/neural_analysis.git",
     packages=["neural_analysis"],
+    python_requires=">=3.10",
     install_requires=[
         "numpy",
         "pandas",
