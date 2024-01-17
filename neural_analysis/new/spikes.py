@@ -105,7 +105,7 @@ def count_spikes(
     return np.asarray(spike_counts)
 
 
-def PSTH(
+def peristimulus_time_histogram(
     spike_times: npt.ArrayLike,
     start_times: npt.ArrayLike,
     end_times: npt.ArrayLike,

@@ -1,10 +1,7 @@
 from pathlib import Path
 import re
 
-import numpy as np
-import numpy.typing as npt
 from scipy.io import loadmat
-import scipy.stats as stats
 
 
 def validate_file(path: Path | str) -> Path:
@@ -97,27 +94,3 @@ def read_mat(path: Path | str) -> dict[str:list]:
 
     mat = loadmat(path, simplify_cells=True)
     return {k: v for k, v in mat.items() if not k.startswith("__")}
-
-
-def confidence_interval(
-    samples: npt.ArrayLike, confidence_level: float = 0.95
-) -> float:
-    """
-    Return the confidence interval of the sample data.
-
-    Parameters
-    ----------
-    samples : array-like
-        Sample data.
-    confidence_level : float, default = 0.95
-        Confidence level of the confidence interval.
-
-    Returns
-    -------
-    moe: float
-        Margin of error of the sample data.
-    """
-
-    t_score = stats.t.ppf((1 + confidence_level) / 2, df=len(samples) - 1)
-    moe = stats.sem(samples) * t_score
-    return moe
