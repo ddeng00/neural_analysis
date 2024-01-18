@@ -8,7 +8,7 @@ from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from .utils import confidence_interval, get_spikes, spike_rates_sw, split_by
+from .utils_old import confidence_interval, get_spikes, spike_rates_sw, split_by
 
 
 def nested_subplots(

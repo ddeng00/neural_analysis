@@ -16,7 +16,7 @@ from statsmodels.discrete.count_model import (
 from statsmodels.tools.tools import add_constant
 from scipy.stats import norm, chi2
 
-from .utils import spike_counts, get_spikes
+from .utils_old import spike_counts, get_spikes
 
 
 def poisson_overdispersion_test(results: PoissonResults, alpha: float = 0.05) -> bool:
