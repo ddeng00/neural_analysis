@@ -40,7 +40,7 @@ def _count_spikes_in_window(
     spike_times = spike_times[start_ind:]
     # find the index of the last spike that occurs within the time window.
     # due to truncation, this is also the number of spikes in the time window.
-    spike_count = np.searchsorted(spike_times, [end_time]) - 1
+    spike_count = np.searchsorted(spike_times, end_time) - 1
 
     if return_truncated:
         return spike_count, spike_times
