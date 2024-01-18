@@ -3,9 +3,15 @@ import numpy.typing as npt
 from sklearn.utils import resample
 
 
-def quantize(x: npt.ArrayLike, n_bins: int) -> npt.NDArray:
+def bin_data(
+    x: npt.ArrayLike,
+    n_bins: int,
+    xmin: float | None = None,
+    xmax: float | None = None,
+    quantize: bool = True,
+) -> npt.NDArray:
     """
-    Quantize x into n_bins of equal size.
+    Quantize x into n_bins.
 
     Parameters
     ----------
@@ -13,17 +19,34 @@ def quantize(x: npt.ArrayLike, n_bins: int) -> npt.NDArray:
             The data to quantize.
         n_bins : int
             The number of bins.
+        xmin : float, default=None
+            The minimum value of the bins.
+            If None, this is set to the minimum value of x.
+        xmax : float, default=None
+            The maximum value of the bins.
+            If None, this is set to the maximum value of x.
+        quantize : bool, default=True
+            If true, quantize x into quantiles. Otherwise, bin x into uniform bins.
 
     Returns
     -------
-        quantized : array-like of shape (n_samples,)
-            The quantized data.
+        binned : array-like of shape (n_samples,)
+            The binned data.
     """
 
     x = np.asarray(x)
-    bins = np.quantile(x, np.linspace(0, 1, n_bins + 1))
-    quantized = np.digitize(x, bins)
-    return quantized
+    if xmin is not None:
+        x[x >= xmin] = xmin
+    if xmax is not None:
+        x[x >= xmax] = xmax
+
+    if quantize:
+        bins = np.quantile(x, np.linspace(0, 1, n_bins + 1))
+    else:
+        bins = np.linspace(np.min(x), np.max(x), n_bins + 1)
+    binned = np.digitize(x, bins)
+
+    return binned
 
 
 def balanced_resample(

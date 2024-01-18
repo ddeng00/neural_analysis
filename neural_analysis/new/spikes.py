@@ -105,7 +105,7 @@ def count_spikes(
     return np.asarray(spike_counts)
 
 
-def peristimulus_time_histogram(
+def PSTH(
     spike_times: npt.ArrayLike,
     start_times: npt.ArrayLike,
     end_times: npt.ArrayLike,
@@ -113,6 +113,7 @@ def peristimulus_time_histogram(
     window_size: float = 500.0,
     step_size: float = 7.8,
     include_oob: bool = True,
+    return_rates: bool = False,
     n_jobs: int = -1,
 ) -> tuple[npt.NDArray, npt.NDArray]:
     """
@@ -134,6 +135,8 @@ def peristimulus_time_histogram(
         Amount to time to shift window for each step in [ms].
     include_oob : bool, default = True
         Whether to include out-of-bounds spikes in windows.
+    return_rates : bool, default = False
+        Whether to return spike rates instead of spike counts.
     n_jobs : int, default = -1
         Number of processes to use. If -1, use all available CPUs. If 0 or 1, do not use multiprocessing.
 
@@ -178,12 +181,15 @@ def peristimulus_time_histogram(
     if not include_oob:  # exclude out-of-bounds spikes
         win_starts = np.maximum(win_starts, rep_starts)
         win_ends = np.minimum(win_ends, rep_ends)
+    win_sizes = win_ends - win_starts
 
     # get spike counts for each window
-    spike_counts = count_spikes(spike_times, win_starts, win_ends, n_jobs=n_jobs)
-    spike_counts = spike_counts.reshape(-1, n_windows).mean(axis=0)
+    spikes = count_spikes(spike_times, win_starts, win_ends, n_jobs=n_jobs)
+    if return_rates:
+        spikes = spikes / win_sizes
+    spikes = spikes.reshape(-1, n_windows).mean(axis=0)
 
     # align timesteps to target times
     timesteps = timesteps - pre_target_dur
 
-    return spike_counts, timesteps
+    return spikes, timesteps
