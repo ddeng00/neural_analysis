@@ -35,7 +35,7 @@ def _count_spikes_in_window(
     """
 
     # find the index of the first spike that occurs within the time window.
-    start_ind = np.searchsorted(spike_times, [start_time])
+    start_ind = np.searchsorted(spike_times, start_time)
     # truncate the spike times to exclude spikes that occur before the time window.
     spike_times = spike_times[start_ind:]
     # find the index of the last spike that occurs within the time window.
