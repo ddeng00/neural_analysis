@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
     name="neural_analysis",
@@ -7,7 +7,7 @@ setup(
     author_email="hdeng3@caltech.edu",
     description="Collection of neural analysis tools",
     url="https://github.com/ddeng00/neural_analysis.git",
-    packages=["neural_analysis"],
+    packages=find_packages(),
     python_requires=">=3.10",
     install_requires=[
         "numpy",
@@ -15,6 +15,7 @@ setup(
         "statsmodels",
         "tqdm",
         "scipy",
+        "scikit-learn",
         "matplotlib",
     ],
 )
