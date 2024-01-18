@@ -142,8 +142,9 @@ def PSTH(
 
     Returns
     -------
-    spike_counts : ndarray of shape (n_windows,)
-        Average spike counts of each PSTH bin.
+    spikes : ndarray of shape (n_windows,)
+        Average spike counts of each PSTH bin. 
+        If return_rates is True, this is the average spike rate in [Hz]. Otherwise, this is the average spike count in [ms].
     timesteps : ndarray of shape (n_windows,)
         Timesteps of each PSTH bin in [ms].
     """
@@ -186,7 +187,7 @@ def PSTH(
     # get spike counts for each window
     spikes = count_spikes(spike_times, win_starts, win_ends, n_jobs=n_jobs)
     if return_rates:
-        spikes = spikes / win_sizes
+        spikes = spikes / (win_sizes / 1000)  # convert to Hz
     spikes = spikes.reshape(-1, n_windows).mean(axis=0)
 
     # align timesteps to target times
