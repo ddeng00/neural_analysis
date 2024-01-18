@@ -176,7 +176,7 @@ def PSTH(
     # calculate start and end times of each sliding window
     rep_starts = np.repeat(start_times, n_windows)
     rep_ends = np.repeat(end_times, n_windows)
-    win_centers = rep_starts + np.tile(timesteps, n_windows)
+    win_centers = rep_starts + np.tile(timesteps, len(start_times))
     win_starts = win_centers - half_ws
     win_ends = win_centers + half_ws
     if not include_oob:  # exclude out-of-bounds spikes
