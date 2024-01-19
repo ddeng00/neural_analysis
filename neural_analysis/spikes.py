@@ -4,14 +4,14 @@ import os
 
 import numpy as np
 import numpy.typing as npt
+import scipy.stats as stats
 
 
 def _count_spikes_in_window(
     spike_times: npt.ArrayLike,
     start_time: float,
     end_time: float,
-    return_truncated: bool = False,
-) -> int:
+) -> int | tuple[int, npt.NDArray]:
     """
     Count spike occurances in a trial time window.
 
@@ -23,27 +23,23 @@ def _count_spikes_in_window(
         Start time of the trial time window.
     end_time : float
         End time of the trial time window.
-    return_truncated : bool, default = False
-        Whether to return the front-truncated spike times.
 
     Returns
     -------
     spike_count : int
         Number of spikes in the time window.
-    truncated : ndarray of shape (n_spikes,)
-        Truncated spike times. Only returned if return_truncated is True.
     """
 
-    # find the index of the first spike that occurs within the time window.
-    start_ind = np.searchsorted(spike_times, start_time)
-    # truncate the spike times to exclude spikes that occur before the time window.
-    spike_times = spike_times[start_ind:]
-    # find the index of the last spike that occurs within the time window.
-    # due to truncation, this is also the number of spikes in the time window.
-    spike_count = np.searchsorted(spike_times, end_time) - 1
+    if len(spike_times) == 0:
+        return 0
 
-    if return_truncated:
-        return spike_count, spike_times
+    # find the index of the first spike that occurs within the time window.
+    start_ind = np.searchsorted(spike_times, start_time, side="left")
+    # truncate the spike times to exclude spikes that occur before the time window.
+    truncated = spike_times[start_ind:]
+    # find the number of spikes in the time window.
+    spike_count = np.searchsorted(truncated, end_time, side="right")
+
     return spike_count
 
 
@@ -91,15 +87,14 @@ def count_spikes(
     if n_jobs == 0 or n_jobs == 1:
         spike_counts = []
         for start_time, end_time in zip(start_times, end_times):
-            spike_count, spike_times = _count_spikes_in_window(
-                spike_times, start_time, end_time, return_truncated=True
-            )
-            spike_counts.append(spike_count)
+            spike_counts.append(_count_spikes_in_window(
+                spike_times, start_time, end_time
+            ))
     else:
         with mp.Pool(n_jobs) as pool:
             spike_counts = pool.starmap(
-                partial(_count_spikes_in_window, spike_times=spike_times),
-                zip(start_times, end_times),
+                _count_spikes_in_window,
+                zip([spike_times] * len(start_times), start_times, end_times),
             )
 
     return np.asarray(spike_counts)
@@ -114,7 +109,8 @@ def PSTH(
     step_size: float = 7.8,
     include_oob: bool = True,
     return_rates: bool = False,
-    n_jobs: int = -1,
+    return_se: bool = False,
+    n_jobs: int = 1,
 ) -> tuple[npt.NDArray, npt.NDArray]:
     """
     Calculate peri-stimulus time histogram (PSTH) from spike times.
@@ -137,16 +133,20 @@ def PSTH(
         Whether to include out-of-bounds spikes in windows.
     return_rates : bool, default = False
         Whether to return spike rates instead of spike counts.
+    return_se : bool, default = False
+        Whether to return standard error of the mean.
     n_jobs : int, default = -1
         Number of processes to use. If -1, use all available CPUs. If 0 or 1, do not use multiprocessing.
 
     Returns
     -------
-    spikes : ndarray of shape (n_windows,)
-        Average spike counts of each PSTH bin. 
-        If return_rates is True, this is the average spike rate in [Hz]. Otherwise, this is the average spike count in [ms].
     timesteps : ndarray of shape (n_windows,)
         Timesteps of each PSTH bin in [ms].
+    mean_spikes : ndarray of shape (n_windows,)
+        Average spike counts of each PSTH bin. 
+        If return_rates is True, this is the average spike rate in [Hz]. Otherwise, this is the average spike count in [ms].
+    se_spikes : ndarray of shape (n_windows,)
+        Standard error of the mean of spike counts/rates in each PSTH bin. Only returned if return_se is True.
     """
 
     # Validate inputs
@@ -159,7 +159,7 @@ def PSTH(
         raise ValueError(
             "target_times must have the same length as start_times/end_times."
         )
-    spike_times = np.asarray(spike_times)
+    target_times, spike_times = np.asarray(target_times), np.asarray(spike_times)
 
     # modify start and end times to have consistent trial window size
     pre_target_dur = np.min(target_times - start_times)
@@ -188,9 +188,16 @@ def PSTH(
     spikes = count_spikes(spike_times, win_starts, win_ends, n_jobs=n_jobs)
     if return_rates:
         spikes = spikes / (win_sizes / 1000)  # convert to Hz
-    spikes = spikes.reshape(-1, n_windows).mean(axis=0)
+    spikes = np.asarray(spikes, dtype=np.float64).reshape(-1, n_windows)
+    
+    # calcualte mean and se of spikes
+    mean_spikes = spikes.mean(axis=0)
+    if return_se:
+        se_spikes = stats.sem(spikes, axis=0)
 
     # align timesteps to target times
     timesteps = timesteps - pre_target_dur
 
-    return spikes, timesteps
+    if return_se:
+        return timesteps, mean_spikes, se_spikes
+    return timesteps, mean_spikes
