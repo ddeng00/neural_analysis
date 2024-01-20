@@ -3,8 +3,6 @@ from typing import overload
 import numpy as np
 import numpy.typing as npt
 import scipy.stats as stats
-from scipy.spatial.distance import directed_hausdorff, mahalanobis, pdist
-from sklearn.decomposition import PCA
 
 
 def margin_of_error(

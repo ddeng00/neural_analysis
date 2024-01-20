@@ -1,4 +1,3 @@
-from functools import partial
 import multiprocessing as mp
 import os
 
@@ -7,13 +6,13 @@ import numpy.typing as npt
 import scipy.stats as stats
 
 
-def _count_spikes_in_window(
+def _get_spikes_in_window(
     spike_times: npt.ArrayLike,
     start_time: float,
     end_time: float,
-) -> int | tuple[int, npt.NDArray]:
+) -> npt.NDArray:
     """
-    Count spike occurances in a trial time window.
+    Return spikes occurring in a trial time window.
 
     Parameters
     ----------
@@ -26,8 +25,8 @@ def _count_spikes_in_window(
 
     Returns
     -------
-    spike_count : int
-        Number of spikes in the time window.
+    spikes : ndarray of shape (n_spikes_in_window,)
+        Spikes occurring in the trial time window.
     """
 
     if len(spike_times) == 0:
@@ -37,10 +36,77 @@ def _count_spikes_in_window(
     start_ind = np.searchsorted(spike_times, start_time, side="left")
     # truncate the spike times to exclude spikes that occur before the time window.
     truncated = spike_times[start_ind:]
-    # find the number of spikes in the time window.
-    spike_count = np.searchsorted(truncated, end_time, side="right")
+    # find the index of the last spike that occurs within the time window.
+    end_ind = np.searchsorted(truncated, end_time, side="right")
+    spikes = truncated[:end_ind]
 
-    return spike_count
+    return spikes
+
+
+def get_spikes(
+    spike_times: npt.ArrayLike,
+    start_times: npt.ArrayLike,
+    end_times: npt.ArrayLike,
+    target_times: npt.ArrayLike | None = None,
+    n_jobs: int = -1,
+) -> list[npt.NDArray]:
+    """
+    Return spikes occurring in trial time windows.
+
+    Parameters
+    ----------
+    spike_times : array-like of shape (n_spikes,)
+        Timings of all spikes of interest. Assumed to be strictly increasing.
+    start_times : array-like of shape (n_trials,)
+        Start times of each trial time window. Assumed to be strictly increasing.
+    end_times : array-like of shape (n_trials,)
+        End times of each trial time window. Assumed to be strictly increasing.
+    start_times : array-like of shape (n_trials,)
+        Target times to align spike timings to. Assumed to be strictly increasing.
+        If None, use start_times.
+    n_jobs : int, default = -1
+        Number of processes to use. If -1, use all available CPUs. If 0 or 1, do not use multiprocessing.
+
+    Returns
+    -------
+    spikes : list of ndarrays of shape (n_spikes_in_window,)
+        Spikes occurring in each trial time window.
+    """
+
+    # Validate n_jobs
+    if n_jobs < -1:
+        raise ValueError("n_jobs must be greater than or equal to -1.")
+    elif n_jobs == -1:
+        n_jobs = os.cpu_count()
+    elif n_jobs > 1:
+        n_jobs = min(n_jobs, os.cpu_count())
+
+    # Validate inputs
+    start_times, end_times = np.asarray(start_times), np.asarray(end_times)
+    if len(start_times) != len(end_times):
+        raise ValueError("start_times and end_times must have the same length.")
+    if target_times is None:
+        target_times = start_times
+    elif len(start_times) != len(target_times):
+        raise ValueError(
+            "target_times must have the same length as start_times/end_times."
+        )
+    target_times, spike_times = np.asarray(target_times), np.asarray(spike_times)
+
+    # If n_jobs is 0 or 1, do not use multiprocessing
+    if n_jobs == 0 or n_jobs == 1:
+        spikes = []
+        for start_time, end_time in zip(start_times, end_times):
+            spikes.append(_get_spikes_in_window(spike_times, start_time, end_time))
+    else:
+        with mp.Pool(n_jobs) as pool:
+            spikes = pool.starmap(
+                _get_spikes_in_window,
+                zip([spike_times] * len(start_times), start_times, end_times),
+            )
+    spikes = [np.asarray(s) - target_times[i] for i, s in enumerate(spikes)]
+
+    return spikes
 
 
 def count_spikes(
@@ -69,35 +135,9 @@ def count_spikes(
         Number of spikes in each time window.
     """
 
-    # Validate n_jobs
-    if n_jobs < -1:
-        raise ValueError("n_jobs must be greater than or equal to -1.")
-    elif n_jobs == -1:
-        n_jobs = os.cpu_count()
-    elif n_jobs > 1:
-        n_jobs = min(n_jobs, os.cpu_count())
-
-    # Validate inputs
-    start_times, end_times = np.asarray(start_times), np.asarray(end_times)
-    if len(start_times) != len(end_times):
-        raise ValueError("start_times and end_times must have the same length.")
-    spike_times = np.asarray(spike_times)
-
-    # If n_jobs is 0 or 1, do not use multiprocessing
-    if n_jobs == 0 or n_jobs == 1:
-        spike_counts = []
-        for start_time, end_time in zip(start_times, end_times):
-            spike_counts.append(_count_spikes_in_window(
-                spike_times, start_time, end_time
-            ))
-    else:
-        with mp.Pool(n_jobs) as pool:
-            spike_counts = pool.starmap(
-                _count_spikes_in_window,
-                zip([spike_times] * len(start_times), start_times, end_times),
-            )
-
-    return np.asarray(spike_counts)
+    spikes = get_spikes(spike_times, start_times, end_times, n_jobs=n_jobs)
+    spike_counts = np.asarray([len(s) for s in spikes])
+    return spike_counts
 
 
 def PSTH(
@@ -143,7 +183,7 @@ def PSTH(
     timesteps : ndarray of shape (n_windows,)
         Timesteps of each PSTH bin in [ms].
     mean_spikes : ndarray of shape (n_windows,)
-        Average spike counts of each PSTH bin. 
+        Average spike counts of each PSTH bin.
         If return_rates is True, this is the average spike rate in [Hz]. Otherwise, this is the average spike count in [ms].
     se_spikes : ndarray of shape (n_windows,)
         Standard error of the mean of spike counts/rates in each PSTH bin. Only returned if return_se is True.
@@ -189,7 +229,7 @@ def PSTH(
     if return_rates:
         spikes = spikes / (win_sizes / 1000)  # convert to Hz
     spikes = np.asarray(spikes, dtype=np.float64).reshape(-1, n_windows)
-    
+
     # calcualte mean and se of spikes
     mean_spikes = spikes.mean(axis=0)
     if return_se:

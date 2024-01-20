@@ -1,6 +1,9 @@
 from pathlib import Path
 import re
 
+import numpy as np
+import numpy.typing as npt
+import pandas as pd
 from scipy.io import loadmat
 
 
@@ -94,3 +97,74 @@ def read_mat(path: Path | str) -> dict[str:list]:
 
     mat = loadmat(path, simplify_cells=True)
     return {k: v for k, v in mat.items() if not k.startswith("__")}
+
+
+def group_df_by(
+    df: pd.DataFrame,
+    by: str | list[str],
+    drop: bool = True,
+) -> dict[str, pd.DataFrame | pd.Series | pd.Index]:
+    """
+    Group a `pandas.DataFrame` by column(s) and return a dictionary of groups.
+
+    Parameters
+    ----------
+    df : `pandas.DataFrame`
+        Data to be grouped.
+    by : str or list of str
+        Column label(s) to group by.
+    drop : bool, default = True
+        Whether to drop the column(s) used for grouping.
+
+    Returns
+    -------
+    groups : dict of {str : `pandas.DataFrame` or `pandas.Series` or `pandas.Index`}
+        Dictionary of separated groups with group value(s) as keys.
+    """
+
+    if isinstance(df, pd.DataFrame):
+        if by is None:
+            raise "Needs to specify at least one column."
+        groups = df.groupby(by).groups
+        if drop:
+            groups = {val: df.loc[idx].drop(by, axis=1) for val, idx in groups.items()}
+        else:
+            groups = {val: df.loc[idx] for val, idx in groups.items()}
+    elif isinstance(df, pd.Series):
+        groups = df.groupby(df).groups
+    else:
+        raise "Unsupported type."
+
+    return groups
+
+
+def seq_where(arr: npt.ArrayLike, seq: npt.ArrayLike) -> npt.NDArray:
+    """
+    Find all occurrences of a sequence in an array.
+
+    Parameters
+    ----------
+    arr : array-like
+        Array to search.
+    seq : array-like
+        Sequence to find.
+
+    Returns
+    -------
+    ind : ndarray
+        Indices of all occurrences of `seq` in `arr`.
+    """
+
+    if len(arr) == 0 or len(seq) == 0:
+        return np.array([])
+    if len(seq) > len(arr):
+        return np.array([])
+    arr, seq = np.asarray(arr), np.asarray(seq)
+
+    ind = []
+    for i in range(len(arr) - len(seq) + 1):
+        if np.all(arr[i : i + len(seq)] == seq):
+            ind.append(i)
+    ind = np.asarray(ind)
+
+    return ind

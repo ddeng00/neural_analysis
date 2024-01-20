@@ -27,6 +27,7 @@ def fit_gamma(
         theta_se : float
             The standard error of the scale parameter. Only returned if return_se is True.
     """
+
     x = np.asarray(x)
     if np.any(x <= 0.0):
         raise ValueError("x must be positive.")
