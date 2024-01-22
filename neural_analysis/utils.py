@@ -168,3 +168,38 @@ def seq_where(arr: npt.ArrayLike, seq: npt.ArrayLike) -> npt.NDArray:
     ind = np.asarray(ind)
 
     return ind
+
+
+def generate_group_names(vars: list[npt.ArrayLike], var_names: list[str]) -> list[str]:
+    """
+    Generate group labels for all combinations of variables.
+
+    Parameters
+    ----------
+    vars : list of array-like
+        A list of arrays with the values of each variable. All arrays must have the same length.
+    var_names : list of str
+        A list of names of each variable.
+
+    Returns
+    -------
+    group_names : list of str
+        A list of names of each variable combination.
+    """
+
+    if len(vars) != len(var_names):
+        raise ValueError(
+            f"The number of variables ({len(vars)}) must match the number of variable names ({len(var_names)})"
+        )
+    if len(vars) == 0:
+        return []
+
+    vars = [np.asarray(var) for var in vars]
+    vars = [var.astype(int) if var.dtype == bool else var for var in vars]
+
+    combiner = lambda var_set: "|".join(
+        [f"{col}={var}" for var, col in zip(var_set, var_names)]
+    )
+    group_names = [combiner(set) for set in zip(*vars)]
+
+    return group_names
