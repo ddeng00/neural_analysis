@@ -203,3 +203,29 @@ def generate_group_names(vars: list[npt.ArrayLike], var_names: list[str]) -> lis
     group_names = [combiner(set) for set in zip(*vars)]
 
     return group_names
+
+
+def pval_to_decimal(pvalue: float) -> str:
+    """
+    Convert p-value to decimal format (i.e., asterisks).
+
+    Parameters
+    ----------
+    pvalue : float
+        P-value to be converted.
+
+    Returns
+    -------
+    str
+        P-value in decimal format.
+
+    """
+
+    if pvalue <= 0.001:
+        return "***"
+    elif pvalue <= 0.01:
+        return "**"
+    elif pvalue <= 0.05:
+        return "*"
+    else:
+        return "n.s."

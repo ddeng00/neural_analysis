@@ -10,6 +10,7 @@ def _get_spikes_in_window(
     spike_times: npt.ArrayLike,
     start_time: float,
     end_time: float,
+    return_truncated: bool = False,
 ) -> npt.NDArray:
     """
     Return spikes occurring in a trial time window.
@@ -22,11 +23,15 @@ def _get_spikes_in_window(
         Start time of the trial time window.
     end_time : float
         End time of the trial time window.
+    return_truncated : bool, default = False
+        Whether to return the truncated spike times.
 
     Returns
     -------
     spikes : ndarray of shape (n_spikes_in_window,)
         Spikes occurring in the trial time window.
+    truncated : ndarray of shape (n_spikes_in_window,)
+        Truncated spike times. Only returned if return_truncated is True.
     """
 
     if len(spike_times) == 0:
@@ -40,6 +45,8 @@ def _get_spikes_in_window(
     end_ind = np.searchsorted(truncated, end_time, side="right")
     spikes = truncated[:end_ind]
 
+    if return_truncated:
+        return spikes, truncated
     return spikes
 
 
@@ -48,6 +55,7 @@ def get_spikes(
     start_times: npt.ArrayLike,
     end_times: npt.ArrayLike,
     target_times: npt.ArrayLike | None = None,
+    truncate: bool = False,
     n_jobs: int = -1,
 ) -> list[npt.NDArray]:
     """
@@ -64,6 +72,8 @@ def get_spikes(
     start_times : array-like of shape (n_trials,)
         Target times to align spike timings to. Assumed to be strictly increasing.
         If None, use start_times.
+    truncate : bool, default = False
+        Whether to truncate spike times to the window size as a speed optimization.
     n_jobs : int, default = -1
         Number of processes to use. If -1, use all available CPUs. If 0 or 1, do not use multiprocessing.
 
@@ -97,7 +107,13 @@ def get_spikes(
     if n_jobs == 0 or n_jobs == 1:
         spikes = []
         for start_time, end_time in zip(start_times, end_times):
-            spikes.append(_get_spikes_in_window(spike_times, start_time, end_time))
+            if truncate:
+                s_spikes, spike_times = _get_spikes_in_window(
+                    spike_times, start_time, end_time, return_truncated=True
+                )
+            else:
+                s_spikes = _get_spikes_in_window(spike_times, start_time, end_time)
+            spikes.append(s_spikes)
     else:
         with mp.Pool(n_jobs) as pool:
             spikes = pool.starmap(
@@ -113,6 +129,7 @@ def count_spikes(
     spike_times: npt.ArrayLike,
     start_times: npt.ArrayLike,
     end_times: npt.ArrayLike,
+    truncate: bool = False,
     n_jobs: int = -1,
 ) -> npt.NDArray:
     """
@@ -126,6 +143,8 @@ def count_spikes(
         Start times of each trial time window. Assumed to be strictly increasing.
     end_times : array-like of shape (n_trials,)
         End times of each trial time window. Assumed to be strictly increasing.
+    truncate : bool, default = False
+        Whether to truncate spike times to the window size as a speed optimization.
     n_jobs : int, default = -1
         Number of processes to use. If -1, use all available CPUs. If 0 or 1, do not use multiprocessing.
 
@@ -135,7 +154,9 @@ def count_spikes(
         Number of spikes in each time window.
     """
 
-    spikes = get_spikes(spike_times, start_times, end_times, n_jobs=n_jobs)
+    spikes = get_spikes(
+        spike_times, start_times, end_times, truncate=truncate, n_jobs=n_jobs
+    )
     spike_counts = np.asarray([len(s) for s in spikes])
     return spike_counts
 
@@ -148,6 +169,7 @@ def PSTH(
     window_size: float = 500.0,
     step_size: float = 7.8,
     include_oob: bool = True,
+    truncate: bool = False,
     return_rates: bool = False,
     return_se: bool = False,
     n_jobs: int = 1,
@@ -171,6 +193,8 @@ def PSTH(
         Amount to time to shift window for each step in [ms].
     include_oob : bool, default = True
         Whether to include out-of-bounds spikes in windows.
+    truncate : bool, default = False
+        Whether to truncate spike times to the window size as a speed optimization.
     return_rates : bool, default = False
         Whether to return spike rates instead of spike counts.
     return_se : bool, default = False
@@ -225,7 +249,9 @@ def PSTH(
     win_sizes = win_ends - win_starts
 
     # get spike counts for each window
-    spikes = count_spikes(spike_times, win_starts, win_ends, n_jobs=n_jobs)
+    spikes = count_spikes(
+        spike_times, win_starts, win_ends, truncate=truncate, n_jobs=n_jobs
+    )
     if return_rates:
         spikes = spikes / (win_sizes / 1000)  # convert to Hz
     spikes = np.asarray(spikes, dtype=np.float64).reshape(-1, n_windows)
