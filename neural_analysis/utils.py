@@ -205,6 +205,51 @@ def generate_group_names(vars: list[npt.ArrayLike], var_names: list[str]) -> lis
     return group_names
 
 
+def make_new_groups(
+    df: pd.DataFrame,
+    columns: list[str],
+    column_names: list[str] | None = None,
+    group_name: str = "new_group",
+    inplace: bool = False,
+) -> pd.DataFrame | None:
+    """
+    Add new group labels to `pandas.DataFrame` based on column values.
+
+    Parameters
+    ----------
+    df : `pandas.DataFrame`
+        DataFrame to add group labels to.
+    columns : list of str
+        Columns to use for grouping.
+    column_names : list of str or None, default=None
+        Names of the columns to use for grouping.
+        If None, original column names are used.
+    group_name : str, default="new_group"
+        Name of the new group column.
+    inplace : bool, default=False
+        Whether to modify `df` in-place. If False, a copy is returned.
+
+    Returns
+    -------
+    df : `pandas.DataFrame` or None
+        DataFrame with new group labels added. If `inplace` is True, returns None.
+    """
+
+    if group_name in df.columns:
+        raise ValueError(f"Column '{group_name}' already exists.")
+
+    if not inplace:
+        df = df.copy()
+
+    if column_names is None:
+        column_names = columns
+
+    df[group_name] = generate_group_names([df[col] for col in columns], column_names)
+
+    if not inplace:
+        return df
+
+
 def pval_to_decimal(pvalue: float) -> str:
     """
     Convert p-value to decimal format (i.e., asterisks).
