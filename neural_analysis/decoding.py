@@ -1,131 +1,201 @@
+from collections import defaultdict
+
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
-from sklearn.model_selection import cross_val_score, RepeatedStratifiedKFold
-from imblearn.pipeline import Pipeline
-from imblearn.under_sampling import RandomUnderSampler
-from tqdm import trange
+from sklearn.model_selection import (
+    cross_val_score,
+    cross_validate,
+    BaseCrossValidator,
+    RepeatedStratifiedKFold,
+)
+from sklearn.pipeline import Pipeline
+from tqdm import tqdm
 
 from .utils import group_df_by
 
 
-def decode_condition(
-    df: pd.DataFrame,
-    firing_rate: str,
-    condition: str,
-    unit: str = "cluster_id",
-    n_psuedo_pops: int = 250,
-    subunit_ratio: float = 0.75,
-    n_permutes: int = 1000,
-    n_splits: int = 5,
-    n_repeats: int = 10,
-    min_units: int = 10,
+def pseudo_pop_decode_var(
+    data: pd.DataFrame,
+    spike_rate_cols: str | list[str],
+    variable_col: str,
+    neuron_col: str,
+    n_pseudo: int = 250,
+    subsample_ratio: float = 0.75,
+    cv: BaseCrossValidator = RepeatedStratifiedKFold(n_repeats=3),
+    n_permute: int = 10,
     show_progress: bool = True,
+    show_accuracy: bool = False,
+    return_weights: bool = False,
     n_jobs: int = -1,
-) -> tuple[npt.NDArray, npt.NDArray]:
+) -> (
+    pd.DataFrame
+    | tuple[pd.DataFrame, pd.DataFrame]
+    | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+):
     """
-    Population decoding of variable of interest.
+    Estimate variable decoding accuracy based on pseudo-populations of neurons.
 
     Parameters
     ----------
-    df : pd.DataFrame
-        Dataframe containing neural firing rate and variable of interest.
-    firing_rate : str
-        Column name of neural firing rate.
-    condition : str
-        Column name of condition variable of interest.
-    unit : str, default="cluster_id"
-        Column name of unit identifier, by default "cluster_id".
-    n_psuedo_pops : int, default=250
-        Number of psuedo-populations to generate, by default 250.
-    subunit_ratio : float, default=0.75
-        Ratio of units to include in psuedo-population, by default 0.75.
-    n_permutes : int, default=1000
-        Number of permutations to perform, by default 1000.
-    n_splits : int, default=5
-        Number of splits for cross-validation, by default 5.
-    n_repeats : int, default=10
-        Number of repeats for cross-validation, by default 10.
-    min_units : int, default=10
-        Number of units minimum to decode. If less than min_units, return None.
+    data : pd.DataFrame
+        Dataframe containing spike rates, variable values, and neuron identities.
+    spike_rate_cols : str or list[str]
+        Column name(s) of spike rates in data.
+    variable_col : str
+        Column name of variable values in data.
+    neuron_col : str
+        Column name of neuron identities in data.
+    n_pseudo : int, default=250
+        Number of random pseudo-populations to construct.
+    subsample_ratio : float, default=0.75
+        Ratio of neurons to include in pseudo-population.
+    cv : `sklearn.model_selection.BaseCrossValidator`, default=`sklearn.model_selection.StratifiedKFold()`
+        Cross-validation splitter.
+    n_permute : int, default=4
+        Number of permutation tests to perform for each pseudo-population.
+        If 0, no permuatation test will be performed.
     show_progress : bool, default=True
-        Show progress bar, by default True.
+        Whether to show progress bar.
+    show_accuracy : bool, default=True
+        Whether to show decoding accuracy.
+        Ignored if show_progress is False.
+    return_weights : bool, default=False
+        Whether to return neuron weights.
     n_jobs : int, default=-1
-        Number of jobs to run in parallel, by default -1.
+        Number of jobs to run in parallel.
 
     Returns
     -------
-    acc : array-like
-        Array of accuracies for each psuedo-population.
-    acc_permute : array-like
-        Array of permuted accuracies for each psuedo-population.
+    accuracies : pd.DataFrame
+        Dataframe of decoding accuracies.
+    null_accuracies : pd.DataFrame
+        Dataframe of null distribution accuracies.
+        Only returned if permutation tests are performed.
+    weights : pd.DataFrame
+        Dataframe of neuron weights.
+        Only returned if return_weights is True.
     """
 
-    # check if enough units
-    n_units = df[unit].nunique()
-    if n_units < min_units:
-        return None, None
+    # check input
+    if isinstance(spike_rate_cols, str):
+        spike_rate_cols = [spike_rate_cols]
 
-    # get features for each condition
-    df = group_df_by(df, by=condition)
-    df = {
-        c: [vv[firing_rate].rename(u) for u, vv in group_df_by(v, by=unit).items()]
-        for c, v in df.items()
-    }
-
-    # create pipeline
-    cv = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
+    # define decoding model
     model = Pipeline(
         [
-            ("sampler", RandomUnderSampler()),
             ("scaler", StandardScaler()),
             ("clf", LinearSVC()),
         ]
     )
 
-    # estimate decoding accuracy
-    acc, acc_permute = [], []
-    reps = trange(n_repeats) if show_progress else range(n_repeats)
-    for _ in reps:
-        # generate pseuo-population
-        X, y = [], []
-        for c, v in df.items():
-            XX = pd.concat(
-                [vv.sample(frac=1, ignore_index=True) for vv in v], axis=1
-            ).dropna()
-            yy = np.full(len(XX), c)
-            X.append(XX)
-            y.append(yy)
-        X, y = pd.concat(X), np.concatenate(y)
+    # pre-processing
+    min_trials = (
+        data.groupby(variable_col)
+        .value_counts([neuron_col])
+        .groupby(neuron_col)
+        .min()
+        .min()
+    )
+    data = group_df_by(data, neuron_col)
 
-        # select random subset of units
-        tot_units = len(X.columns)
-        selected = np.random.choice(
-            tot_units, int(tot_units * subunit_ratio), replace=False
-        )
-        X = X.iloc[:, selected]
+    # initialize variables
+    accuracies = defaultdict(list)
+    null_accuracies = defaultdict(list)
+    weights = defaultdict(list)
 
-        # cross-validate
-        acc_pp = cross_val_score(model, X, y, cv=cv, n_jobs=n_jobs)
-        acc.extend(acc_pp)
+    # start analysis
+    acc_ave = {}
+    with tqdm(total=n_pseudo * len(spike_rate_cols), disable=not show_progress) as pbar:
+        for i in range(n_pseudo):
+            # generate random pseudo-population
+            pseudo = {
+                neuron: df.groupby(variable_col)
+                .sample(n=min_trials)
+                .reset_index(drop=True)
+                for neuron, df in data.items()
+            }
 
-        # permutation test
-        for _ in range(n_permutes):
-            acc_permute.extend(
-                cross_val_score(
-                    model,
-                    X,
-                    np.random.permutation(y),
-                    cv=cv,
-                    n_jobs=n_jobs,
-                )
+            # select random subset of neurons
+            neurons = list(pseudo.keys())
+            to_remove = np.random.choice(
+                neurons,
+                size=int((1 - subsample_ratio) * len(neurons)),
+                replace=False,
             )
+            pseudo = {
+                neuron: df for neuron, df in pseudo.items() if neuron not in to_remove
+            }
 
-        # show stats
-        if show_progress:
-            reps.set_postfix({"n_selected": len(selected), "acc": acc_pp.mean()})
+            # estimate accuracies for each spike window
+            for window in spike_rate_cols:
+                # gather data
+                X, y = {}, None
+                for neuron, df in pseudo.items():
+                    X[neuron] = np.asarray(df[window])
+                    if y is None:
+                        y = df[variable_col]
+                X = pd.DataFrame(X)
 
-    acc, acc_permute = np.asarray(acc), np.asarray(acc_permute)
-    return acc, acc_permute
+                # cross-validate
+                cv_results = cross_validate(
+                    model, X, y, cv=cv, n_jobs=n_jobs, return_estimator=True
+                )
+                cv_accuracies = cv_results["test_score"]
+                accuracies[window].extend(cv_accuracies)
+                if return_weights:
+                    cv_weights = [
+                        pd.Series(cv_model["clf"].coef_[0], index=X.columns)
+                        for cv_model in cv_results["estimator"]
+                    ]
+                    weights[window].extend(cv_weights)
+
+                # perform permutation tests
+                for _ in range(n_permute):
+                    null_scores = cross_val_score(
+                        model,
+                        X,
+                        np.random.permutation(y),
+                        cv=cv,
+                        n_jobs=n_jobs,
+                    )
+                    null_accuracies[window].extend(null_scores)
+
+                # update progress bar
+                if show_progress:
+                    if show_accuracy and i % 25 == 0:
+                        acc_ave[window] = np.mean(accuracies[window])
+                    pbar.update()
+
+            if show_progress:
+                progress = {
+                    "n_trials": min_trials,
+                    "n_selected": f"{len(X.columns)}/{len(neurons)}",
+                }
+                if show_accuracy:
+                    progress.update(acc_ave)
+                pbar.set_postfix(progress)
+
+    # convert results to dataframe
+    accuracies = pd.DataFrame(accuracies)
+    if n_permute > 0:
+        null_accuracies = pd.DataFrame(null_accuracies)
+    if return_weights:
+        tmp = []
+        for k, v in weights.items():
+            v = pd.concat(v, axis=1).T
+            v["window"] = k
+            tmp.append(v)
+        weights = pd.concat(tmp)
+
+    # return results
+    if n_permute > 0 and return_weights:
+        return accuracies, null_accuracies, weights
+    elif n_permute > 0:
+        return accuracies, null_accuracies
+    elif return_weights:
+        return accuracies, weights
+    else:
+        return accuracies

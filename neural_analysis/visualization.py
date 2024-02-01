@@ -245,7 +245,9 @@ def plot_spike_raster(
     # reorder trials by RT
     if reaction_times is not None:
         reaction_times = np.asarray(reaction_times)
-        order = np.argsort(reaction_times)[::-1]
+        order = np.argsort(reaction_times)
+        if reaction_times[0] > 0:
+            order = order[::-1]
         spikes = spikes[order]
         reaction_times = reaction_times[order]
         groups = groups[order] if groups is not None else None

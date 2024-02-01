@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="neural_analysis",
-    version="1.0.3",
+    version="1.0.4",
     author="Daniel Deng",
     author_email="hdeng3@caltech.edu",
     description="Collection of neural analysis tools",
@@ -16,6 +16,7 @@ setup(
         "tqdm",
         "scipy",
         "scikit-learn",
+        "imbalanced-learn",
         "matplotlib",
     ],
 )
