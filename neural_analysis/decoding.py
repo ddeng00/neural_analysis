@@ -106,6 +106,7 @@ def pseudo_pop_decode_var_cross_temp(
     spike_rate_cols: list[str],
     variable_col: str,
     neuron_col: str,
+    min_trials: int | None = None,
     n_pseudo: int = 250,
     subsample_ratio: float = 0.75,
     n_permute: int = 10,
@@ -125,6 +126,8 @@ def pseudo_pop_decode_var_cross_temp(
         Column name of variable values in data.
     neuron_col : str
         Column name of neuron identities in data.
+    min_trials : int or None, default=None
+        Minimum number of trials to include in each pseudo-population.
     n_pseudo : int, default=250
         Number of random pseudo-populations to construct.
     subsample_ratio : float, default=0.75
@@ -154,13 +157,14 @@ def pseudo_pop_decode_var_cross_temp(
         raise ValueError("At least two spike rate columns are required.")
 
     # pre-processing
-    min_trials = (
-        data.groupby(variable_col)
-        .value_counts([neuron_col])
-        .groupby(neuron_col)
-        .min()
-        .min()
-    )
+    if min_trials is None:
+        min_trials = (
+            data.groupby(variable_col)
+            .value_counts([neuron_col])
+            .groupby(neuron_col)
+            .min()
+            .min()
+        )
     data = group_df_by(data, neuron_col)
 
     # initialize variables
@@ -205,6 +209,7 @@ def pseudo_pop_decode_var(
     spike_rate_cols: str | list[str],
     variable_col: str,
     neuron_col: str,
+    min_trials: int | None = None,
     n_pseudo: int = 250,
     subsample_ratio: float = 0.75,
     cv: BaseCrossValidator = StratifiedKFold(),
@@ -231,6 +236,8 @@ def pseudo_pop_decode_var(
         Column name of variable values in data.
     neuron_col : str
         Column name of neuron identities in data.
+    min_trials : int or None, default=None
+        Minimum number of trials to include in each pseudo-population.
     n_pseudo : int, default=250
         Number of random pseudo-populations to construct.
     subsample_ratio : float, default=0.75
@@ -275,13 +282,14 @@ def pseudo_pop_decode_var(
     )
 
     # pre-processing
-    min_trials = (
-        data.groupby(variable_col)
-        .value_counts([neuron_col])
-        .groupby(neuron_col)
-        .min()
-        .min()
-    )
+    if min_trials is None:
+        min_trials = (
+            data.groupby(variable_col)
+            .value_counts([neuron_col])
+            .groupby(neuron_col)
+            .min()
+            .min()
+        )
     data = group_df_by(data, neuron_col)
 
     # initialize variables

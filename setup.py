@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="neural_analysis",
-    version="1.0.5",
+    version="1.0.6",
     author="Daniel Deng",
     author_email="hdeng3@caltech.edu",
     description="Collection of neural analysis tools",
