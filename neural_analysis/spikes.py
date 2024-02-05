@@ -150,8 +150,6 @@ def PSTH(
     window_size: float = 500.0,
     step_size: float = 7.8,
     include_oob: bool = True,
-    return_trials: bool = False,
-    return_rates: bool = False,
     n_jobs: int = 1,
 ) -> tuple[npt.NDArray, ...]:
     """
@@ -173,10 +171,6 @@ def PSTH(
         Amount to time to shift window for each step in [ms].
     include_oob : bool, default = True
         Whether to include out-of-bounds spikes in windows.
-    return_rates : bool, default = False
-        Whether to return spike rates instead of spike counts.
-    return_trials : bool, default = False
-        Whether to return spike counts/rates for each trial.
     n_jobs : int, default = -1
         Number of processes to use. If -1, use all available CPUs. If 0 or 1, do not use multiprocessing.
 
@@ -229,18 +223,11 @@ def PSTH(
     win_sizes = win_ends - win_starts
 
     # get spike counts for each window
-    spikes = count_spikes(spike_times, win_starts, win_ends, n_jobs=n_jobs)
-    if return_rates:
-        spikes = spikes / (win_sizes / 1000)  # convert to Hz
-    spikes = np.asarray(spikes, dtype=np.float64).reshape(-1, n_windows)
-
-    # calcualte mean and se of spikes
-    mean_spikes = spikes.mean(axis=0)
-    se_spikes = stats.sem(spikes, axis=0)
+    spike_rates = count_spikes(spike_times, win_starts, win_ends, n_jobs=n_jobs)
+    spike_rates = spike_rates / (win_sizes / 1000)  # convert to Hz
+    spike_rates = np.asarray(spike_rates, dtype=np.float64).reshape(-1, n_windows)
 
     # align timesteps to target times
     timesteps = timesteps - pre_target_dur
 
-    if return_trials:
-        return timesteps, spikes, mean_spikes, se_spikes
-    return timesteps, mean_spikes, se_spikes
+    return timesteps, spike_rates

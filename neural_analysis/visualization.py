@@ -197,7 +197,6 @@ def plot_spike_raster(
     spikes: list[npt.ArrayLike],
     reaction_times: npt.ArrayLike = None,
     groups: npt.ArrayLike = None,
-    TOIs: npt.ArrayLike = None,
     ax: plt.Axes = None,
 ) -> plt.Axes:
     """
@@ -212,9 +211,6 @@ def plot_spike_raster(
         If provided, trials are reordered by RT.
     groups : array-like, default=None
         Group labels for each trial.
-    TOIs : array-like, default=None
-        Times of interest for each trial.
-        If provided, vertical lines are plotted at each time.
     ax : `matplotlib.pyplot.Axes`, default=None
         Axes object to plot on. If None, a new figure is created.
 
@@ -284,18 +280,15 @@ def plot_spike_raster(
                     color="k",
                 )
 
-    # plot vertical lines at TOIs
-    if TOIs is not None:
-        for toi in TOIs:
-            ax.axvline(toi, color="black", lw=1, ls="--")
+    # plot zero line
+    ax.axvline(0, color="black", ls="--")
 
     return ax
 
 
 def plot_PSTH(
     timesteps: npt.ArrayLike,
-    mean_spike_rates: npt.ArrayLike,
-    se_spike_rates: npt.ArrayLike | None = None,
+    spike_rates: npt.ArrayLike,
     groups: npt.ArrayLike = None,
     TOIs: npt.ArrayLike = None,
     ax: plt.Axes = None,
@@ -307,11 +300,8 @@ def plot_PSTH(
     ----------
     timesteps : array-like
         Time steps.
-    mean_spike_rates : array-like
-        Mean spike rates for each time step.
-    se_spike_rates : array-like, default=None
-        Standard error of spike rates for each time step.
-        If provided, shaded error bars are plotted.
+    spike_rates : array-like
+        Spike rates across trials for each time step.
     groups : array-like, default=None
         Group labels for each time step.
     TOIs : array-like, default=None
@@ -332,28 +322,28 @@ def plot_PSTH(
         ax = plt.gca()
 
     # check input
-    if len(timesteps) != len(mean_spike_rates):
+    timesteps, spike_rates = np.asarray(timesteps), np.asarray(spike_rates)
+    if timesteps.shape[0] != spike_rates.shape[1]:
         raise ValueError("Number of time steps and spike rates must match.")
-    if se_spike_rates is not None and len(mean_spike_rates) != len(se_spike_rates):
-        raise ValueError("Length of spike rate statistics must match.")
-    timesteps, mean_spike_rates = np.asarray(timesteps), np.asarray(mean_spike_rates)
-    if se_spike_rates is not None:
-        se_spike_rates = np.asarray(se_spike_rates)
+    if spike_rates.shape[0] != len(groups):
+        raise ValueError("Number of trials and groups must match.")
 
     # plot PSTH
-    sns.lineplot(x=timesteps, y=mean_spike_rates, color="black", ax=ax)
-    if se_spike_rates is not None:
-        ax.fill_between(
-            timesteps,
-            mean_spike_rates - se_spike_rates,
-            mean_spike_rates + se_spike_rates,
-            color="black",
-            alpha=0.2,
-        )
+    sns.lineplot(x=timesteps, y=np.mean(spike_rates, axis=0), hue=groups, ax=ax)
+
+
+    # if se_spike_rates is not None:
+    #     ax.fill_between(
+    #         timesteps,
+    #         mean_spike_rates - se_spike_rates,
+    #         mean_spike_rates + se_spike_rates,
+    #         color="black",
+    #         alpha=0.2,
+    #     )
 
     # plot vertical lines at TOIs
     if TOIs is not None:
         for toi in TOIs:
-            ax.axvline(toi, color="black", lw=1, ls="--")
+            ax.axvline(toi, color="black", ls="--")
 
     return ax
