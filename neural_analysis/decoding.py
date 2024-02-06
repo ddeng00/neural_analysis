@@ -11,12 +11,110 @@ from sklearn.model_selection import (
     cross_validate,
     BaseCrossValidator,
     StratifiedKFold,
+    LeaveOneGroupOut,
 )
 from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
 from tqdm.contrib.concurrent import process_map
 
 from .utils import group_df_by
+
+
+# def _pseudo_pop_decode_var_cross_cond_helper(
+#     data,
+#     spike_rate_cols,
+#     variable_col,
+#     condition_col,
+#     min_trials,
+#     subsample_ratio,
+#     n_permute,
+# ):
+
+#     # initialize variables
+#     accuracies = defaultdict(list)
+#     null_accuracies = defaultdict(list)
+
+#     # define decoding model
+#     model = Pipeline(
+#         [
+#             ("scaler", StandardScaler()),
+#             ("clf", LinearSVC()),
+#         ]
+#     )
+#     cv = LeaveOneGroupOut()
+
+#     # generate random pseudo-population
+#     pseudo = {
+#         neuron: df.groupby([variable_col, condition_col])
+#         .sample(n=min_trials)
+#         .reset_index(drop=True)
+#         for neuron, df in data.items()
+#     }
+
+#     # select random subset of neurons
+#     neurons = list(pseudo.keys())
+#     if subsample_ratio < 1:
+#         to_remove = np.random.choice(
+#             neurons,
+#             size=int((1 - subsample_ratio) * len(neurons)),
+#             replace=False,
+#         )
+#         pseudo = {
+#             neuron: df for neuron, df in pseudo.items() if neuron not in to_remove
+#         }
+
+#     # estimate accuracies across conditions for each spike window
+#     for window in spike_rate_cols:
+#         # gather base data
+#         X_base, y, groups = {}, None, None
+#         for neuron, df in pseudo.items():
+#             X_base[neuron] = np.asarray(df[window])
+#             if y is None:
+#                 y = df[variable_col]
+#             if groups is None:
+#                 groups = df[condition_col]
+#         X_base = pd.DataFrame(X_base)
+
+#     pass
+
+
+# def pseudo_pop_decode_var_cross_cond(
+#     data: pd.DataFrame,
+#     spike_rate_cols: str | list[str],
+#     variable_col: str,
+#     condition_col: str,
+#     neuron_col: str,
+#     min_trials: int | None = None,
+#     n_pseudo: int = 250,
+#     subsample_ratio: float = 1.0,
+#     n_permute: int = 10,
+#     show_progress: bool = True,
+#     show_accuracy: bool = False,
+#     return_weights: bool = False,
+#     n_jobs: int = -1,
+# ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+
+#     # check input
+#     if isinstance(spike_rate_cols, str):
+#         spike_rate_cols = [spike_rate_cols]
+
+#     # pre-processing
+#     if min_trials is None:
+#         min_trials = (
+#             data.groupby(variable_col)
+#             .value_counts([neuron_col])
+#             .groupby(neuron_col)
+#             .min()
+#             .min()
+#         )
+#     data = group_df_by(data, neuron_col)
+
+#     # initialize
+#     accuracies = defaultdict(list)
+#     null_accuracies = defaultdict(list)
+
+#     # start analysis
+#     pass
 
 
 def _pseudo_pop_decode_var_cross_time_helper(
@@ -50,12 +148,15 @@ def _pseudo_pop_decode_var_cross_time_helper(
 
     # select random subset of neurons
     neurons = list(pseudo.keys())
-    to_remove = np.random.choice(
-        neurons,
-        size=int((1 - subsample_ratio) * len(neurons)),
-        replace=False,
-    )
-    pseudo = {neuron: df for neuron, df in pseudo.items() if neuron not in to_remove}
+    if subsample_ratio < 1:
+        to_remove = np.random.choice(
+            neurons,
+            size=int((1 - subsample_ratio) * len(neurons)),
+            replace=False,
+        )
+        pseudo = {
+            neuron: df for neuron, df in pseudo.items() if neuron not in to_remove
+        }
 
     # estimate accuracies across each pair of spike windows
     for window1 in spike_rate_cols:
@@ -108,7 +209,7 @@ def pseudo_pop_decode_var_cross_temp(
     neuron_col: str,
     min_trials: int | None = None,
     n_pseudo: int = 250,
-    subsample_ratio: float = 0.75,
+    subsample_ratio: float = 1.0,
     n_permute: int = 10,
     skip_self: bool = False,
     n_jobs: int = -1,
@@ -172,7 +273,6 @@ def pseudo_pop_decode_var_cross_temp(
     null_accuracies = defaultdict(list)
 
     # start analysis
-    max_workers = cpu_count() if n_jobs == -1 else n_jobs
     results = process_map(
         _pseudo_pop_decode_var_cross_time_helper,
         [data] * n_pseudo,
@@ -182,7 +282,7 @@ def pseudo_pop_decode_var_cross_temp(
         [subsample_ratio] * n_pseudo,
         [n_permute] * n_pseudo,
         [skip_self] * n_pseudo,
-        max_workers=max_workers,
+        max_workers=cpu_count() if n_jobs == -1 else n_jobs,
     )
 
     # gather results
@@ -211,8 +311,8 @@ def pseudo_pop_decode_var(
     neuron_col: str,
     min_trials: int | None = None,
     n_pseudo: int = 250,
-    subsample_ratio: float = 0.75,
-    cv: BaseCrossValidator = StratifiedKFold(),
+    subsample_ratio: float = 1.0,
+    n_splits: int = 5,
     n_permute: int = 10,
     show_progress: bool = True,
     show_accuracy: bool = False,
@@ -242,8 +342,8 @@ def pseudo_pop_decode_var(
         Number of random pseudo-populations to construct.
     subsample_ratio : float, default=0.75
         Ratio of neurons to include in pseudo-population.
-    cv : `sklearn.model_selection.BaseCrossValidator`, default=`sklearn.model_selection.StratifiedKFold()`
-        Cross-validation splitter.
+    n_splits : int, default=5
+        Number of cross-validation splits to use.
     n_permute : int, default=10
         Number of permutation tests to perform for each pseudo-population.
         If 0, no permuatation test will be performed.
@@ -280,6 +380,7 @@ def pseudo_pop_decode_var(
             ("clf", LinearSVC()),
         ]
     )
+    cv = StratifiedKFold(n_splits=n_splits)
 
     # pre-processing
     if min_trials is None:
@@ -311,14 +412,17 @@ def pseudo_pop_decode_var(
 
             # select random subset of neurons
             neurons = list(pseudo.keys())
-            to_remove = np.random.choice(
-                neurons,
-                size=int((1 - subsample_ratio) * len(neurons)),
-                replace=False,
-            )
-            pseudo = {
-                neuron: df for neuron, df in pseudo.items() if neuron not in to_remove
-            }
+            if subsample_ratio < 1:
+                to_remove = np.random.choice(
+                    neurons,
+                    size=int((1 - subsample_ratio) * len(neurons)),
+                    replace=False,
+                )
+                pseudo = {
+                    neuron: df
+                    for neuron, df in pseudo.items()
+                    if neuron not in to_remove
+                }
 
             # estimate accuracies for each spike window
             for window in spike_rate_cols:
