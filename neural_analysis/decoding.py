@@ -113,6 +113,7 @@ def pseudo_pop_decode_var_cross_temp(
     min_trials: int | None = None,
     n_pseudo: int = 250,
     subsample_ratio: float = 1.0,
+    subsample_ratio: float = 1.0,
     n_permute: int = 10,
     skip_self: bool = False,
     n_jobs: int = -1,
@@ -226,6 +227,8 @@ def pseudo_pop_decode_var(
     n_pseudo: int = 250,
     subsample_ratio: float = 1.0,
     n_splits: int = 5,
+    subsample_ratio: float = 1.0,
+    n_splits: int = 5,
     n_permute: int = 10,
     show_progress: bool = True,
     show_accuracy: bool = False,
@@ -255,6 +258,8 @@ def pseudo_pop_decode_var(
         Number of random pseudo-populations to construct.
     subsample_ratio : float, default=0.75
         Ratio of neurons to include in pseudo-population.
+    n_splits : int, default=5
+        Number of cross-validation splits to use.
     n_splits : int, default=5
         Number of cross-validation splits to use.
     n_permute : int, default=10
@@ -294,6 +299,7 @@ def pseudo_pop_decode_var(
         ]
     )
     cv = StratifiedKFold(n_splits=n_splits)
+    cv = StratifiedKFold(n_splits=n_splits)
 
     # pre-processing
     if min_trials is None:
@@ -325,6 +331,17 @@ def pseudo_pop_decode_var(
 
             # select random subset of neurons
             neurons = list(pseudo.keys())
+            if subsample_ratio < 1:
+                to_remove = np.random.choice(
+                    neurons,
+                    size=int((1 - subsample_ratio) * len(neurons)),
+                    replace=False,
+                )
+                pseudo = {
+                    neuron: df
+                    for neuron, df in pseudo.items()
+                    if neuron not in to_remove
+                }
             if subsample_ratio < 1:
                 to_remove = np.random.choice(
                     neurons,
