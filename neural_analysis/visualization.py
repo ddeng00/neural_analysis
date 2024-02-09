@@ -2,9 +2,10 @@ import numpy as np
 import numpy.typing as npt
 import matplotlib.pyplot as plt
 import seaborn as sns
+import scipy.stats as stats
 
 
-def remove_legend_duplicates(ax: plt.Axes) -> None:
+def remove_legend_duplicates(ax: plt.Axes, no_marker: bool = False) -> None:
     """
     Remove duplicate legend entries.
 
@@ -12,11 +13,16 @@ def remove_legend_duplicates(ax: plt.Axes) -> None:
     ----------
     ax : matplotlib Axes
         Axes object with legend.
+    no_marker : bool, default=False
+        Whether to remove legend entries with no marker.
     """
 
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
-    ax.legend(by_label.values(), by_label.keys())
+    if no_marker:
+        ax.legend(by_label.values(), by_label.keys(), markerscale=0)
+    else:
+        ax.legend(by_label.values(), by_label.keys())
 
     return ax
 
@@ -290,7 +296,6 @@ def plot_PSTH(
     timesteps: npt.ArrayLike,
     spike_rates: npt.ArrayLike,
     groups: npt.ArrayLike = None,
-    TOIs: npt.ArrayLike = None,
     ax: plt.Axes = None,
 ) -> plt.Axes:
     """
@@ -304,9 +309,6 @@ def plot_PSTH(
         Spike rates across trials for each time step.
     groups : array-like, default=None
         Group labels for each time step.
-    TOIs : array-like, default=None
-        Times of interest for each trial.
-        If provided, vertical lines are plotted at each time.
     ax : `matplotlib.pyplot.Axes`, default=None
         Axes object to plot on. If None, a new figure is created.
 
@@ -325,25 +327,35 @@ def plot_PSTH(
     timesteps, spike_rates = np.asarray(timesteps), np.asarray(spike_rates)
     if timesteps.shape[0] != spike_rates.shape[1]:
         raise ValueError("Number of time steps and spike rates must match.")
-    if spike_rates.shape[0] != len(groups):
+    if groups is not None and spike_rates.shape[0] != len(groups):
         raise ValueError("Number of trials and groups must match.")
 
     # plot PSTH
-    sns.lineplot(x=timesteps, y=np.mean(spike_rates, axis=0), hue=groups, ax=ax)
+    if groups is None:
+        mean_rates = np.mean(spike_rates, axis=0)
+        sd_rates = stats.sem(spike_rates, axis=0)
+        ax.plot(timesteps, mean_rates)
+        ax.fill_between(
+            timesteps,
+            mean_rates - sd_rates,
+            mean_rates + sd_rates,
+            alpha=0.25,
+        )
+    else:
+        for g in np.unique(groups):
+            idx = groups == g
+            mean_rates = np.mean(spike_rates[idx], axis=0)
+            sd_rates = stats.sem(spike_rates[idx], axis=0)
+            ax.plot(timesteps, mean_rates, label=g)
+            ax.fill_between(
+                timesteps,
+                mean_rates - sd_rates,
+                mean_rates + sd_rates,
+                alpha=0.25,
+            )
+        ax.legend()
 
-
-    # if se_spike_rates is not None:
-    #     ax.fill_between(
-    #         timesteps,
-    #         mean_spike_rates - se_spike_rates,
-    #         mean_spike_rates + se_spike_rates,
-    #         color="black",
-    #         alpha=0.2,
-    #     )
-
-    # plot vertical lines at TOIs
-    if TOIs is not None:
-        for toi in TOIs:
-            ax.axvline(toi, color="black", ls="--")
+    # plot zero line
+    ax.axvline(0, color="black", ls="--")
 
     return ax

@@ -170,7 +170,9 @@ def seq_where(arr: npt.ArrayLike, seq: npt.ArrayLike) -> npt.NDArray:
     return ind
 
 
-def generate_group_names(vars: list[npt.ArrayLike], var_names: list[str]) -> list[str]:
+def generate_group_names(
+    vars: list[npt.ArrayLike], var_names: list[str], keep_name: bool = True
+) -> list[str]:
     """
     Generate group labels for all combinations of variables.
 
@@ -180,6 +182,8 @@ def generate_group_names(vars: list[npt.ArrayLike], var_names: list[str]) -> lis
         A list of arrays with the values of each variable. All arrays must have the same length.
     var_names : list of str
         A list of names of each variable.
+    keep_name : bool, default=True
+        Whether to include the variable name in the group label.
 
     Returns
     -------
@@ -197,9 +201,12 @@ def generate_group_names(vars: list[npt.ArrayLike], var_names: list[str]) -> lis
     vars = [np.asarray(var) for var in vars]
     vars = [var.astype(int) if var.dtype == bool else var for var in vars]
 
-    combiner = lambda var_set: "|".join(
-        [f"{col}={var}" for var, col in zip(var_set, var_names)]
-    )
+    if keep_name:
+        combiner = lambda var_set: " | ".join(
+            [f"{col}={var}" for var, col in zip(var_set, var_names)]
+        )
+    else:
+        combiner = lambda var_set: " | ".join([f"{var}" for var in var_set])
     group_names = [combiner(set) for set in zip(*vars)]
 
     return group_names
@@ -210,6 +217,7 @@ def make_new_groups(
     columns: list[str],
     column_names: list[str] | None = None,
     group_name: str = "new_group",
+    keep_name: bool = True,
     inplace: bool = False,
 ) -> pd.DataFrame | None:
     """
@@ -226,6 +234,8 @@ def make_new_groups(
         If None, original column names are used.
     group_name : str, default="new_group"
         Name of the new group column.
+    keep_name : bool, default=True
+        Whether to include the variable name in the group label.
     inplace : bool, default=False
         Whether to modify `df` in-place. If False, a copy is returned.
 
@@ -244,7 +254,9 @@ def make_new_groups(
     if column_names is None:
         column_names = columns
 
-    df[group_name] = generate_group_names([df[col] for col in columns], column_names)
+    df[group_name] = generate_group_names(
+        [df[col] for col in columns], column_names, keep_name
+    )
 
     if not inplace:
         return df

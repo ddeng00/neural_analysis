@@ -1,5 +1,8 @@
 from collections import defaultdict
 from os import cpu_count
+import multiprocessing as mp
+from functools import partial
+from itertools import product
 
 import numpy as np
 import numpy.typing as npt
@@ -11,6 +14,7 @@ from sklearn.model_selection import (
     cross_validate,
     BaseCrossValidator,
     StratifiedKFold,
+    LeaveOneGroupOut,
 )
 from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
@@ -19,86 +23,86 @@ from tqdm.contrib.concurrent import process_map
 from .utils import group_df_by
 
 
-def _pseudo_pop_decode_var_cross_time_helper(
-    data,
-    spike_rate_cols,
-    variable_col,
-    min_trials,
-    subsample_ratio,
-    n_permute,
-    skip_self,
-):
+def pseudo_pop_decode_var_cross_cond(
+    data: pd.DataFrame,
+    spike_rate_cols: str | list[str],
+    variable_col: str,
+    condition_col: str,
+    neuron_col: str,
+    min_trials: int | None = None,
+    n_pseudo: int = 250,
+    subsample_ratio: float = 1.0,
+    n_permute: int = 10,
+    n_jobs: int = -1,
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+
+    # check input
+    if isinstance(spike_rate_cols, str):
+        spike_rate_cols = [spike_rate_cols]
+    if n_jobs == -1:
+        n_jobs = cpu_count()
+    elif n_jobs < 1:
+        raise ValueError("Invalid n_jobs.")
+    n_jobs = min(n_jobs, cpu_count())
+
+    # group unique conditions by variable
+    vc1, vc2 = [
+        v[condition_col].unique().tolist()
+        for v in group_df_by(data, variable_col).values()
+    ]
+
+    # pre-processing
+    if min_trials is None:
+        min_trials = (
+            data.groupby([variable_col, condition_col])
+            .value_counts([neuron_col])
+            .groupby(neuron_col)
+            .min()
+            .min()
+        )
+    data = group_df_by(data, neuron_col)
 
     # initialize variables
     accuracies = defaultdict(list)
     null_accuracies = defaultdict(list)
 
-    # define decoding model
-    model = Pipeline(
-        [
-            ("scaler", StandardScaler()),
-            ("clf", LinearSVC()),
-        ]
-    )
-    cv = StratifiedKFold()
+    # start analysis
+    with mp.Pool(n_jobs) as pool:
+        pbar = tqdm(total=n_pseudo)
+        results = []
+        func = partial(
+            _cross_cond_helper,
+            data,
+            spike_rate_cols,
+            variable_col,
+            condition_col,
+            min_trials,
+            subsample_ratio,
+            n_permute,
+            vc1,
+            vc2,
+        )
+        for result in pool.imap_unordered(func, range(n_pseudo)):
+            results.append(result)
+            pbar.update()
 
-    # generate random pseudo-population
-    pseudo = {
-        neuron: df.groupby(variable_col).sample(n=min_trials).reset_index(drop=True)
-        for neuron, df in data.items()
-    }
+    # gather results
+    for acc, null in results:
+        for k, v in acc.items():
+            accuracies[k].extend(v)
+        for k, v in null.items():
+            null_accuracies[k].extend(v)
 
-    # select random subset of neurons
-    neurons = list(pseudo.keys())
-    to_remove = np.random.choice(
-        neurons,
-        size=int((1 - subsample_ratio) * len(neurons)),
-        replace=False,
-    )
-    pseudo = {neuron: df for neuron, df in pseudo.items() if neuron not in to_remove}
+    # convert results to dataframe
+    accuracies = pd.DataFrame(accuracies)
+    if n_permute > 0:
+        null_accuracies = pd.DataFrame(null_accuracies)
 
-    # estimate accuracies across each pair of spike windows
-    for window1 in spike_rate_cols:
-        # gather base data
-        X_base, y = {}, None
-        for neuron, df in pseudo.items():
-            X_base[neuron] = np.asarray(df[window1])
-            if y is None:
-                y = df[variable_col]
-        X_base = pd.DataFrame(X_base)
-
-        # estimate accuracies for each other spike window
-        for window2 in spike_rate_cols:
-            if skip_self and window1 == window2:
-                continue
-
-            name = f"{window1} → {window2}"
-
-            # gather comparison data
-            X_other = {}
-            for neuron, df in pseudo.items():
-                X_other[neuron] = np.asarray(df[window2])
-            X_other = pd.DataFrame(X_other)
-
-            # cross-temporal cross-validate
-            for train_idx, test_idx in cv.split(X_base, y):
-                X_train = X_base.iloc[train_idx]
-                X_test = X_other.iloc[test_idx]
-                model.fit(X_train, y.iloc[train_idx])
-                accuracy = model.score(X_test, y.iloc[test_idx])
-                accuracies[name].append(accuracy)
-
-                # perform permutation tests
-                for _ in range(n_permute):
-                    y_perm = np.random.permutation(y)
-                    for train_idx, test_idx in cv.split(X_base, y_perm):
-                        X_train = X_base.iloc[train_idx]
-                        X_test = X_other.iloc[test_idx]
-                        model.fit(X_train, y_perm.iloc[train_idx])
-                        null_accuracy = model.score(X_test, y_perm.iloc[test_idx])
-                        null_accuracies[name].append(null_accuracy)
-
-    return accuracies, null_accuracies
+    # return results
+    if n_permute > 0:
+        return accuracies, null_accuracies
+    else:
+        return accuracies
 
 
 def pseudo_pop_decode_var_cross_temp(
@@ -108,7 +112,7 @@ def pseudo_pop_decode_var_cross_temp(
     neuron_col: str,
     min_trials: int | None = None,
     n_pseudo: int = 250,
-    subsample_ratio: float = 0.75,
+    subsample_ratio: float = 1.0,
     n_permute: int = 10,
     skip_self: bool = False,
     n_jobs: int = -1,
@@ -155,6 +159,11 @@ def pseudo_pop_decode_var_cross_temp(
     # check input
     if len(spike_rate_cols) < 2:
         raise ValueError("At least two spike rate columns are required.")
+    if n_jobs == -1:
+        n_jobs = cpu_count()
+    elif n_jobs < 1:
+        raise ValueError("Invalid n_jobs.")
+    n_jobs = min(n_jobs, cpu_count())
 
     # pre-processing
     if min_trials is None:
@@ -172,18 +181,22 @@ def pseudo_pop_decode_var_cross_temp(
     null_accuracies = defaultdict(list)
 
     # start analysis
-    max_workers = cpu_count() if n_jobs == -1 else n_jobs
-    results = process_map(
-        _pseudo_pop_decode_var_cross_time_helper,
-        [data] * n_pseudo,
-        [spike_rate_cols] * n_pseudo,
-        [variable_col] * n_pseudo,
-        [min_trials] * n_pseudo,
-        [subsample_ratio] * n_pseudo,
-        [n_permute] * n_pseudo,
-        [skip_self] * n_pseudo,
-        max_workers=max_workers,
-    )
+    with mp.Pool(n_jobs) as pool:
+        pbar = tqdm(total=n_pseudo)
+        results = []
+        func = partial(
+            _cross_temp_helper,
+            data,
+            spike_rate_cols,
+            variable_col,
+            min_trials,
+            subsample_ratio,
+            n_permute,
+            skip_self,
+        )
+        for result in pool.imap_unordered(func, range(n_pseudo)):
+            results.append(result)
+            pbar.update()
 
     # gather results
     for acc, null in results:
@@ -211,8 +224,8 @@ def pseudo_pop_decode_var(
     neuron_col: str,
     min_trials: int | None = None,
     n_pseudo: int = 250,
-    subsample_ratio: float = 0.75,
-    cv: BaseCrossValidator = StratifiedKFold(),
+    subsample_ratio: float = 1.0,
+    n_splits: int = 5,
     n_permute: int = 10,
     show_progress: bool = True,
     show_accuracy: bool = False,
@@ -242,8 +255,8 @@ def pseudo_pop_decode_var(
         Number of random pseudo-populations to construct.
     subsample_ratio : float, default=0.75
         Ratio of neurons to include in pseudo-population.
-    cv : `sklearn.model_selection.BaseCrossValidator`, default=`sklearn.model_selection.StratifiedKFold()`
-        Cross-validation splitter.
+    n_splits : int, default=5
+        Number of cross-validation splits to use.
     n_permute : int, default=10
         Number of permutation tests to perform for each pseudo-population.
         If 0, no permuatation test will be performed.
@@ -280,6 +293,7 @@ def pseudo_pop_decode_var(
             ("clf", LinearSVC()),
         ]
     )
+    cv = StratifiedKFold(n_splits=n_splits)
 
     # pre-processing
     if min_trials is None:
@@ -311,14 +325,17 @@ def pseudo_pop_decode_var(
 
             # select random subset of neurons
             neurons = list(pseudo.keys())
-            to_remove = np.random.choice(
-                neurons,
-                size=int((1 - subsample_ratio) * len(neurons)),
-                replace=False,
-            )
-            pseudo = {
-                neuron: df for neuron, df in pseudo.items() if neuron not in to_remove
-            }
+            if subsample_ratio < 1:
+                to_remove = np.random.choice(
+                    neurons,
+                    size=int((1 - subsample_ratio) * len(neurons)),
+                    replace=False,
+                )
+                pseudo = {
+                    neuron: df
+                    for neuron, df in pseudo.items()
+                    if neuron not in to_remove
+                }
 
             # estimate accuracies for each spike window
             for window in spike_rate_cols:
@@ -390,3 +407,164 @@ def pseudo_pop_decode_var(
         return accuracies, weights
     else:
         return accuracies
+
+
+def _cross_cond_helper(
+    data,
+    spike_rate_cols,
+    variable_col,
+    condition_col,
+    min_trials,
+    subsample_ratio,
+    n_permute,
+    vc1,
+    vc2,
+    *args,
+):
+
+    # initialize variables
+    accuracies = defaultdict(list)
+    null_accuracies = defaultdict(list)
+
+    # define decoding model
+    model = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("clf", LinearSVC()),
+        ]
+    )
+
+    # generate random pseudo-population
+    pseudo = {
+        neuron: df.groupby([variable_col, condition_col])
+        .sample(n=min_trials)
+        .reset_index(drop=True)
+        for neuron, df in data.items()
+    }
+
+    # select random subset of neurons
+    neurons = list(pseudo.keys())
+    if subsample_ratio < 1:
+        to_remove = np.random.choice(
+            neurons,
+            size=int((1 - subsample_ratio) * len(neurons)),
+            replace=False,
+        )
+        pseudo = {
+            neuron: df for neuron, df in pseudo.items() if neuron not in to_remove
+        }
+
+    for period in spike_rate_cols:
+        # gather base data
+        X, y, cond = {}, None, None
+        for neuron, df in pseudo.items():
+            X[neuron] = np.asarray(df[period])
+            if y is None:
+                y = df[variable_col]
+            if cond is None:
+                cond = df[condition_col]
+        X = pd.DataFrame(X)
+
+        # estimate accuracies for each cross-condition split
+        for c1, c2 in product(vc1, vc2):
+            test_idx = (cond == c1) | (cond == c2)
+            X_test, y_test = X[test_idx], y[test_idx]
+            X_train, y_train = X[~test_idx], y[~test_idx]
+            model.fit(X_train, y_train)
+            accuracy = model.score(X_test, y_test)
+            accuracies[period].append(accuracy)
+
+            # perform permutation tests
+            for _ in range(n_permute):
+                X_test_perm = X_test.sample(frac=1, axis=1)
+                X_test_perm.columns = X_test.columns
+                null_accuracy = model.score(X_test_perm, y_test)
+                null_accuracies[period].append(null_accuracy)
+
+    return accuracies, null_accuracies
+
+
+def _cross_temp_helper(
+    data,
+    spike_rate_cols,
+    variable_col,
+    min_trials,
+    subsample_ratio,
+    n_permute,
+    skip_self,
+    *args,
+):
+
+    # initialize variables
+    accuracies = defaultdict(list)
+    null_accuracies = defaultdict(list)
+
+    # define decoding model
+    model = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("clf", LinearSVC()),
+        ]
+    )
+    cv = StratifiedKFold()
+
+    # generate random pseudo-population
+    pseudo = {
+        neuron: df.groupby(variable_col).sample(n=min_trials).reset_index(drop=True)
+        for neuron, df in data.items()
+    }
+
+    # select random subset of neurons
+    neurons = list(pseudo.keys())
+    if subsample_ratio < 1:
+        to_remove = np.random.choice(
+            neurons,
+            size=int((1 - subsample_ratio) * len(neurons)),
+            replace=False,
+        )
+        pseudo = {
+            neuron: df for neuron, df in pseudo.items() if neuron not in to_remove
+        }
+
+    # estimate accuracies across each pair of spike windows
+    for window1 in spike_rate_cols:
+        # gather base data
+        X_base, y = {}, None
+        for neuron, df in pseudo.items():
+            X_base[neuron] = np.asarray(df[window1])
+            if y is None:
+                y = df[variable_col]
+        X_base = pd.DataFrame(X_base)
+
+        # estimate accuracies for each other spike window
+        for window2 in spike_rate_cols:
+            if skip_self and window1 == window2:
+                continue
+
+            name = f"{window1} → {window2}"
+
+            # gather comparison data
+            X_other = {}
+            for neuron, df in pseudo.items():
+                X_other[neuron] = np.asarray(df[window2])
+            X_other = pd.DataFrame(X_other)
+
+            # cross-temporal cross-validate
+            for train_idx, test_idx in cv.split(X_base, y):
+                X_train = X_base.iloc[train_idx]
+                X_test = X_other.iloc[test_idx]
+                model.fit(X_train, y.iloc[train_idx])
+                accuracy = model.score(X_test, y.iloc[test_idx])
+                accuracies[name].append(accuracy)
+
+                # perform permutation tests
+                for _ in range(n_permute):
+                    y_perm = np.random.permutation(y)
+                    for train_idx, test_idx in cv.split(X_base, y_perm):
+                        X_train = X_base.iloc[train_idx]
+                        X_test = X_other.iloc[test_idx]
+                        model.fit(X_train, y_perm.iloc[train_idx])
+                        null_accuracy = model.score(X_test, y_perm.iloc[test_idx])
+                        null_accuracies[name].append(null_accuracy)
+
+    return accuracies, null_accuracies
