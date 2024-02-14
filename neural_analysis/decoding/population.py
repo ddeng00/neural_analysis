@@ -11,8 +11,94 @@ from sklearn.model_selection import cross_val_score, cross_validate, StratifiedK
 from sklearn.pipeline import Pipeline
 from tqdm.auto import tqdm
 
-from ._population_helper import _cross_cond_helper, _cross_temp_helper
+from ._population_helper import (
+    _pop_vec_sim_var_cross_cond_helper,
+    _pop_decode_var_cross_cond_helper,
+    _pop_decode_var_cross_temp_helper,
+)
 from ..utils import group_df_by
+
+
+def pop_vec_sim_var_cross_cond(
+    data: pd.DataFrame,
+    spike_rate_cols: str | list[str],
+    variable_col: str,
+    condition_col: str,
+    neuron_col: str,
+    min_trials: int | None = None,
+    n_pseudo: int = 250,
+    subsample_ratio: float = 1.0,
+    n_permute: int = 10,
+    n_jobs: int = -1,
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+
+    # check input
+    if isinstance(spike_rate_cols, str):
+        spike_rate_cols = [spike_rate_cols]
+    if n_jobs == -1:
+        n_jobs = cpu_count()
+    elif n_jobs < 1:
+        raise ValueError("Invalid n_jobs.")
+    n_jobs = min(n_jobs, cpu_count())
+
+    # group unique conditions by variable
+    vc1, vc2 = [
+        v[condition_col].unique().tolist()
+        for v in group_df_by(data, variable_col).values()
+    ]
+
+    # pre-processing
+    if min_trials is None:
+        min_trials = (
+            data.groupby([variable_col, condition_col])
+            .value_counts([neuron_col])
+            .groupby(neuron_col)
+            .min()
+            .min()
+        )
+    data = group_df_by(data, neuron_col)
+
+    # initialize variables
+    similaries = defaultdict(list)
+    null_similaries = defaultdict(list)
+
+    # start analysis
+    with mp.Pool(n_jobs) as pool:
+        pbar = tqdm(total=n_pseudo)
+        results = []
+        func = partial(
+            _pop_vec_sim_var_cross_cond_helper,
+            data,
+            spike_rate_cols,
+            variable_col,
+            condition_col,
+            min_trials,
+            subsample_ratio,
+            n_permute,
+            vc1,
+            vc2,
+        )
+        for result in pool.imap_unordered(func, range(n_pseudo)):
+            results.append(result)
+            pbar.update()
+
+    # gather results
+    for acc, null in results:
+        for k, v in acc.items():
+            similaries[k].extend(v)
+        for k, v in null.items():
+            null_similaries[k].extend(v)
+
+    # convert results to dataframe
+    similaries = pd.DataFrame(similaries)
+    if n_permute > 0:
+        null_similaries = pd.DataFrame(null_similaries)
+
+    # return results
+    if n_permute > 0:
+        return similaries, null_similaries
+    else:
+        return similaries
 
 
 def pop_decode_var_cross_cond(
@@ -98,7 +184,7 @@ def pop_decode_var_cross_cond(
         pbar = tqdm(total=n_pseudo)
         results = []
         func = partial(
-            _cross_cond_helper,
+            _pop_decode_var_cross_cond_helper,
             data,
             spike_rate_cols,
             variable_col,
@@ -212,7 +298,7 @@ def pop_decode_var_cross_temp(
         pbar = tqdm(total=n_pseudo)
         results = []
         func = partial(
-            _cross_temp_helper,
+            _pop_decode_var_cross_temp_helper,
             data,
             spike_rate_cols,
             variable_col,
