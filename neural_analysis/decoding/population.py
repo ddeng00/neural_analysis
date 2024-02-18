@@ -5,16 +5,13 @@ from functools import partial
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import LinearSVC
-from sklearn.model_selection import cross_val_score, cross_validate, StratifiedKFold
-from sklearn.pipeline import Pipeline
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from ._population_helper import (
-    _pop_vec_sim_var_cross_cond_helper,
-    _pop_decode_var_cross_cond_helper,
     _pop_decode_var_cross_temp_helper,
+    _pop_decode_var_helper,
+    _pop_decode_var_cross_cond_helper,
+    _pop_vec_sim_var_cross_cond_helper,
 )
 from ..utils import group_df_by
 
@@ -26,23 +23,70 @@ def pop_vec_sim_var_cross_cond(
     condition_col: str,
     neuron_col: str,
     min_trials: int | None = None,
-    n_pseudo: int = 250,
+    n_samples: int = 250,
     subsample_ratio: float = 1.0,
     n_permute: int = 10,
+    show_progress: bool = True,
     n_jobs: int = -1,
-) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+) -> dict[str : pd.DataFrame]:
+    """
+    Estimate coding direction similarity across conditions based on pseudo-populations of neurons.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Dataframe containing spike rates, variable values, and neuron identities.
+    spike_rate_cols : str or list[str]
+        Column name(s) of spike rates in data.
+    variable_col : str
+        Column name of variable values in data.
+    neuron_col : str
+        Column name of neuron identities in data.
+    min_trials : int or None, default=None
+        Minimum number of trials to include in each pseudo-population.
+    n_samples : int, default=250
+        Number of neuron and trial samples to construct.
+    subsample_ratio : float, default=0.75
+        Ratio of neurons to include in pseudo-population for each sample construction.
+    n_permute : int, default=10
+        Number of permutation tests to perform for each pseudo-population.
+        If 0, no permuatation test will be performed.
+    show_progress : bool, default=True
+        Whether to show progress bar.
+    n_jobs : int, default=-1
+        Number of jobs to run in parallel.
+
+    Returns
+    -------
+    results : dict
+        Dictionary containing similarity results. Keys include:
+        - 'similarities': Dataframe of coding direction similarities.
+        - 'null_similarities': Dataframe of null distribution similarities. Only available if permutation tests are performed.
+    """
 
     # check input
     if isinstance(spike_rate_cols, str):
         spike_rate_cols = [spike_rate_cols]
+    for col in spike_rate_cols:
+        if col not in data.columns:
+            raise ValueError(f"Column '{col}' not found in data.")
+    if variable_col not in data.columns:
+        raise ValueError(f"Column '{variable_col}' not found in data.")
+    if condition_col not in data.columns:
+        raise ValueError(f"Column '{condition_col}' not found in data.")
+    if neuron_col not in data.columns:
+        raise ValueError(f"Column '{neuron_col}' not found in data.")
+
+    # set n_jobs
     if n_jobs == -1:
         n_jobs = cpu_count()
     elif n_jobs < 1:
-        raise ValueError("Invalid n_jobs.")
-    n_jobs = min(n_jobs, cpu_count())
+        raise ValueError("n_jobs must be -1 or a positive integer.")
+    n_jobs = min(n_samples, n_jobs, cpu_count())
+    chunksize = int(np.ceil(n_samples / n_jobs))
 
     # group unique conditions by variable
-    vc1, vc2 = [
+    cond_grp_1, cond_grp_2 = [
         v[condition_col].unique().tolist()
         for v in group_df_by(data, variable_col).values()
     ]
@@ -59,13 +103,14 @@ def pop_vec_sim_var_cross_cond(
     data = group_df_by(data, neuron_col)
 
     # initialize variables
-    similaries = defaultdict(list)
-    null_similaries = defaultdict(list)
+    similarities = defaultdict(list)
+    if n_permute > 0:
+        null_similarities = defaultdict(list)
 
     # start analysis
     with mp.Pool(n_jobs) as pool:
-        pbar = tqdm(total=n_pseudo)
-        results = []
+        pbar = tqdm(total=n_samples, disable=not show_progress)
+        all_results = []
         func = partial(
             _pop_vec_sim_var_cross_cond_helper,
             data,
@@ -75,30 +120,33 @@ def pop_vec_sim_var_cross_cond(
             min_trials,
             subsample_ratio,
             n_permute,
-            vc1,
-            vc2,
+            cond_grp_1,
+            cond_grp_2,
         )
-        for result in pool.imap_unordered(func, range(n_pseudo)):
-            results.append(result)
-            pbar.update()
+        for results in pool.imap_unordered(func, range(n_samples), chunksize=chunksize):
+            all_results.append(results)
+            if show_progress:
+                pbar.update()
+        pbar.close()
 
     # gather results
-    for acc, null in results:
-        for k, v in acc.items():
-            similaries[k].extend(v)
-        for k, v in null.items():
-            null_similaries[k].extend(v)
+    for results in all_results:
+        for k, v in results["accuracies"].items():
+            similarities[k].extend(v)
+        if n_permute > 0:
+            for k, v in results["null_accuracies"].items():
+                null_similarities[k].extend(v)
 
     # convert results to dataframe
-    similaries = pd.DataFrame(similaries)
+    similarities = pd.DataFrame(similarities)
     if n_permute > 0:
-        null_similaries = pd.DataFrame(null_similaries)
+        null_similarities = pd.DataFrame(null_similarities)
 
     # return results
+    results = {"similarities": similarities}
     if n_permute > 0:
-        return similaries, null_similaries
-    else:
-        return similaries
+        results["null_similarities"] = null_similarities
+    return results
 
 
 def pop_decode_var_cross_cond(
@@ -108,11 +156,13 @@ def pop_decode_var_cross_cond(
     condition_col: str,
     neuron_col: str,
     min_trials: int | None = None,
-    n_pseudo: int = 250,
+    n_samples: int = 250,
     subsample_ratio: float = 1.0,
     n_permute: int = 10,
+    show_progress: bool = True,
+    return_weights: bool = False,
     n_jobs: int = -1,
-) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+) -> dict[str : pd.DataFrame]:
     """
     Estimate variable decoding generalizability across conditions based on pseudo-populations of neurons.
 
@@ -130,36 +180,52 @@ def pop_decode_var_cross_cond(
         Column name of neuron identities in data.
     min_trials : int or None, default=None
         Minimum number of trials to include in each pseudo-population.
-    n_pseudo : int, default=250
-        Number of random pseudo-populations to construct.
+    n_samples : int, default=250
+        Number of neuron and trial samples to construct.
     subsample_ratio : float, default=0.75
-        Ratio of neurons to include in pseudo-population.
+        Ratio of neurons to include in pseudo-population for each sample construction.
     n_permute : int, default=10
         Number of permutation tests to perform for each pseudo-population.
         If 0, no permuatation test will be performed.
+    show_progress : bool, default=True
+        Whether to show progress bar.
+    return_weights : bool, default=False
+        Whether to return neuron weights.
     n_jobs : int, default=-1
         Number of jobs to run in parallel.
 
     Returns
     -------
-    accuracies : pd.DataFrame
-        Dataframe of decoding accuracies.
-    null_accuracies : pd.DataFrame
-        Dataframe of null distribution accuracies.
-        Only returned if permutation tests are performed.
+    results : dict
+        Dictionary containing decoding results. Keys include:
+        - 'accuracies': Dataframe of decoding accuracies.
+        - 'null_accuracies': Dataframe of null distribution accuracies. Only available if permutation tests are performed.
+        - 'weights': Dataframe of neuron weights. Only available if return_weights is True.
     """
 
     # check input
     if isinstance(spike_rate_cols, str):
         spike_rate_cols = [spike_rate_cols]
+    for col in spike_rate_cols:
+        if col not in data.columns:
+            raise ValueError(f"Column '{col}' not found in data.")
+    if variable_col not in data.columns:
+        raise ValueError(f"Column '{variable_col}' not found in data.")
+    if condition_col not in data.columns:
+        raise ValueError(f"Column '{condition_col}' not found in data.")
+    if neuron_col not in data.columns:
+        raise ValueError(f"Column '{neuron_col}' not found in data.")
+
+    # set n_jobs
     if n_jobs == -1:
         n_jobs = cpu_count()
     elif n_jobs < 1:
-        raise ValueError("Invalid n_jobs.")
-    n_jobs = min(n_jobs, cpu_count())
+        raise ValueError("n_jobs must be -1 or a positive integer.")
+    n_jobs = min(n_samples, n_jobs, cpu_count())
+    chunksize = int(np.ceil(n_samples / n_jobs))
 
     # group unique conditions by variable
-    vc1, vc2 = [
+    cond_grp_1, cond_grp_2 = [
         v[condition_col].unique().tolist()
         for v in group_df_by(data, variable_col).values()
     ]
@@ -177,12 +243,15 @@ def pop_decode_var_cross_cond(
 
     # initialize variables
     accuracies = defaultdict(list)
-    null_accuracies = defaultdict(list)
+    if n_permute > 0:
+        null_accuracies = defaultdict(list)
+    if return_weights:
+        weights = defaultdict(list)
 
     # start analysis
     with mp.Pool(n_jobs) as pool:
-        pbar = tqdm(total=n_pseudo)
-        results = []
+        pbar = tqdm(total=n_samples, disable=not show_progress)
+        all_results = []
         func = partial(
             _pop_decode_var_cross_cond_helper,
             data,
@@ -192,30 +261,46 @@ def pop_decode_var_cross_cond(
             min_trials,
             subsample_ratio,
             n_permute,
-            vc1,
-            vc2,
+            cond_grp_1,
+            cond_grp_2,
+            return_weights,
         )
-        for result in pool.imap_unordered(func, range(n_pseudo)):
-            results.append(result)
-            pbar.update()
+        for results in pool.imap_unordered(func, range(n_samples), chunksize=chunksize):
+            all_results.append(results)
+            if show_progress:
+                pbar.update()
+        pbar.close()
 
     # gather results
-    for acc, null in results:
-        for k, v in acc.items():
+    for results in all_results:
+        for k, v in results["accuracies"].items():
             accuracies[k].extend(v)
-        for k, v in null.items():
-            null_accuracies[k].extend(v)
+        if n_permute > 0:
+            for k, v in results["null_accuracies"].items():
+                null_accuracies[k].extend(v)
+        if return_weights:
+            for k, v in results["weights"].items():
+                weights[k].extend(v)
 
     # convert results to dataframe
     accuracies = pd.DataFrame(accuracies)
     if n_permute > 0:
         null_accuracies = pd.DataFrame(null_accuracies)
+    if return_weights:
+        tmp = []
+        for k, v in weights.items():
+            v = pd.concat(v, axis=1).T
+            v["window"] = k
+            tmp.append(v)
+        weights = pd.concat(tmp)
 
     # return results
+    results = {"accuracies": accuracies}
     if n_permute > 0:
-        return accuracies, null_accuracies
-    else:
-        return accuracies
+        results["null_accuracies"] = null_accuracies
+    if return_weights:
+        results["weights"] = weights
+    return results
 
 
 def pop_decode_var_cross_temp(
@@ -224,12 +309,15 @@ def pop_decode_var_cross_temp(
     variable_col: str,
     neuron_col: str,
     min_trials: int | None = None,
-    n_pseudo: int = 250,
+    n_splits: int = 5,
+    n_samples: int = 250,
     subsample_ratio: float = 1.0,
     n_permute: int = 10,
     skip_self: bool = False,
+    show_progress: bool = True,
+    return_weights: bool = False,
     n_jobs: int = -1,
-) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+) -> dict[str : pd.DataFrame]:
     """
     Estimate variable decoding generalizability across time based on pseudo-populations of neurons.
 
@@ -245,38 +333,53 @@ def pop_decode_var_cross_temp(
         Column name of neuron identities in data.
     min_trials : int or None, default=None
         Minimum number of trials to include in each pseudo-population.
-    n_pseudo : int, default=250
-        Number of random pseudo-populations to construct.
+    n_samples : int, default=250
+        Number of neuron and trial samples to construct.
     subsample_ratio : float, default=0.75
-        Ratio of neurons to include in pseudo-population.
+        Ratio of neurons to include in pseudo-population for each sample construction.
+    n_splits : int, default=5
+        Number of cross-validation splits to use.
     n_permute : int, default=10
         Number of permutation tests to perform for each pseudo-population.
         If 0, no permuatation test will be performed.
     skip_self : bool, default=True
         Whether to skip self-comparisons.
+    show_progress : bool, default=True
+        Whether to show progress bar.
+    return_weights : bool, default=False
+        Whether to return neuron weights.
     n_jobs : int, default=-1
         Number of jobs to run in parallel.
 
     Returns
     -------
-    accuracies : pd.DataFrame
-        Dataframe of decoding accuracies.
-    null_accuracies : pd.DataFrame
-        Dataframe of null distribution accuracies.
-        Only returned if permutation tests are performed.
-    weights : pd.DataFrame
-        Dataframe of neuron weights.
-        Only returned if return_weights is True.
+    results : dict
+        Dictionary containing decoding results. Keys include:
+        - 'accuracies': Dataframe of decoding accuracies.
+        - 'null_accuracies': Dataframe of null distribution accuracies. Only available if permutation tests are performed.
+        - 'weights': Dataframe of neuron weights. Only available if return_weights is True.
     """
 
     # check input
     if len(spike_rate_cols) < 2:
-        raise ValueError("At least two spike rate columns are required.")
+        raise ValueError(
+            "At least two spike rate columns are required for cross-temporal comparison."
+        )
+    for col in spike_rate_cols:
+        if col not in data.columns:
+            raise ValueError(f"Column '{col}' not found in data.")
+    if variable_col not in data.columns:
+        raise ValueError(f"Column '{variable_col}' not found in data.")
+    if neuron_col not in data.columns:
+        raise ValueError(f"Column '{neuron_col}' not found in data.")
+
+    # set n_jobs
     if n_jobs == -1:
         n_jobs = cpu_count()
     elif n_jobs < 1:
-        raise ValueError("Invalid n_jobs.")
-    n_jobs = min(n_jobs, cpu_count())
+        raise ValueError("n_jobs must be -1 or a positive integer.")
+    n_jobs = min(n_samples, n_jobs, cpu_count())
+    chunksize = int(np.ceil(n_samples / n_jobs))
 
     # pre-processing
     if min_trials is None:
@@ -291,12 +394,15 @@ def pop_decode_var_cross_temp(
 
     # initialize variables
     accuracies = defaultdict(list)
-    null_accuracies = defaultdict(list)
+    if n_permute > 0:
+        null_accuracies = defaultdict(list)
+    if return_weights:
+        weights = defaultdict(list)
 
     # start analysis
     with mp.Pool(n_jobs) as pool:
-        pbar = tqdm(total=n_pseudo)
-        results = []
+        pbar = tqdm(total=n_samples, disable=not show_progress)
+        all_results = []
         func = partial(
             _pop_decode_var_cross_temp_helper,
             data,
@@ -304,30 +410,47 @@ def pop_decode_var_cross_temp(
             variable_col,
             min_trials,
             subsample_ratio,
+            n_splits,
             n_permute,
             skip_self,
+            return_weights,
         )
-        for result in pool.imap_unordered(func, range(n_pseudo)):
-            results.append(result)
-            pbar.update()
+        for results in pool.imap_unordered(func, range(n_samples), chunksize=chunksize):
+            all_results.append(results)
+            if show_progress:
+                pbar.update()
+        pbar.close()
 
     # gather results
-    for acc, null in results:
-        for k, v in acc.items():
+    for results in all_results:
+        for k, v in results["accuracies"].items():
             accuracies[k].extend(v)
-        for k, v in null.items():
-            null_accuracies[k].extend(v)
+        if n_permute > 0:
+            for k, v in results["null_accuracies"].items():
+                null_accuracies[k].extend(v)
+        if return_weights:
+            for k, v in results["weights"].items():
+                weights[k].extend(v)
 
     # convert results to dataframe
     accuracies = pd.DataFrame(accuracies)
     if n_permute > 0:
         null_accuracies = pd.DataFrame(null_accuracies)
+    if return_weights:
+        tmp = []
+        for k, v in weights.items():
+            v = pd.concat(v, axis=1).T
+            v["window"] = k
+            tmp.append(v)
+        weights = pd.concat(tmp)
 
     # return results
+    results = {"accuracies": accuracies}
     if n_permute > 0:
-        return accuracies, null_accuracies
-    else:
-        return accuracies
+        results["null_accuracies"] = null_accuracies
+    if return_weights:
+        results["weights"] = weights
+    return results
 
 
 def pop_decode_var(
@@ -336,19 +459,14 @@ def pop_decode_var(
     variable_col: str,
     neuron_col: str,
     min_trials: int | None = None,
-    n_pseudo: int = 250,
+    n_samples: int = 250,
     subsample_ratio: float = 1.0,
     n_splits: int = 5,
     n_permute: int = 10,
     show_progress: bool = True,
-    show_accuracy: bool = False,
     return_weights: bool = False,
     n_jobs: int = -1,
-) -> (
-    pd.DataFrame
-    | tuple[pd.DataFrame, pd.DataFrame]
-    | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
-):
+) -> dict[str : pd.DataFrame]:
     """
     Estimate variable decoding accuracy based on pseudo-populations of neurons.
 
@@ -364,10 +482,10 @@ def pop_decode_var(
         Column name of neuron identities in data.
     min_trials : int or None, default=None
         Minimum number of trials to include in each pseudo-population.
-    n_pseudo : int, default=250
-        Number of random pseudo-populations to construct.
+    n_samples : int, default=250
+        Number of neuron and trial samples to construct.
     subsample_ratio : float, default=0.75
-        Ratio of neurons to include in pseudo-population.
+        Ratio of neurons to include in pseudo-population for each sample construction.
     n_splits : int, default=5
         Number of cross-validation splits to use.
     n_splits : int, default=5
@@ -377,9 +495,6 @@ def pop_decode_var(
         If 0, no permuatation test will be performed.
     show_progress : bool, default=True
         Whether to show progress bar.
-    show_accuracy : bool, default=True
-        Whether to show decoding accuracy.
-        Ignored if show_progress is False.
     return_weights : bool, default=False
         Whether to return neuron weights.
     n_jobs : int, default=-1
@@ -387,28 +502,31 @@ def pop_decode_var(
 
     Returns
     -------
-    accuracies : pd.DataFrame
-        Dataframe of decoding accuracies.
-    null_accuracies : pd.DataFrame
-        Dataframe of null distribution accuracies.
-        Only returned if permutation tests are performed.
-    weights : pd.DataFrame
-        Dataframe of neuron weights.
-        Only returned if return_weights is True.
+    results : dict
+        Dictionary containing decoding results. Keys include:
+        - 'accuracies': Dataframe of decoding accuracies.
+        - 'null_accuracies': Dataframe of null distribution accuracies. Only available if permutation tests are performed.
+        - 'weights': Dataframe of neuron weights. Only available if return_weights is True.
     """
 
     # check input
     if isinstance(spike_rate_cols, str):
         spike_rate_cols = [spike_rate_cols]
+    for col in spike_rate_cols:
+        if col not in data.columns:
+            raise ValueError(f"Column '{col}' not found in data.")
+    if variable_col not in data.columns:
+        raise ValueError(f"Column '{variable_col}' not found in data.")
+    if neuron_col not in data.columns:
+        raise ValueError(f"Column '{neuron_col}' not found in data.")
 
-    # define decoding model
-    model = Pipeline(
-        [
-            ("scaler", StandardScaler()),
-            ("clf", LinearSVC()),
-        ]
-    )
-    cv = StratifiedKFold(n_splits=n_splits)
+    # set n_jobs
+    if n_jobs == -1:
+        n_jobs = cpu_count()
+    elif n_jobs < 1:
+        raise ValueError("n_jobs must be -1 or a positive integer.")
+    n_jobs = min(n_samples, n_jobs, cpu_count())
+    chunksize = int(np.ceil(n_samples / n_jobs))
 
     # pre-processing
     if min_trials is None:
@@ -423,94 +541,42 @@ def pop_decode_var(
 
     # initialize variables
     accuracies = defaultdict(list)
-    null_accuracies = defaultdict(list)
-    weights = defaultdict(list)
+    if n_permute > 0:
+        null_accuracies = defaultdict(list)
+    if return_weights:
+        weights = defaultdict(list)
 
     # start analysis
-    acc_ave = {}
-    with tqdm(total=n_pseudo * len(spike_rate_cols), disable=not show_progress) as pbar:
-        for i in range(n_pseudo):
-            # generate random pseudo-population
-            pseudo = {
-                neuron: df.groupby(variable_col)
-                .sample(n=min_trials)
-                .reset_index(drop=True)
-                for neuron, df in data.items()
-            }
-
-            # select random subset of neurons
-            neurons = list(pseudo.keys())
-            if subsample_ratio < 1:
-                to_remove = np.random.choice(
-                    neurons,
-                    size=int((1 - subsample_ratio) * len(neurons)),
-                    replace=False,
-                )
-                pseudo = {
-                    neuron: df
-                    for neuron, df in pseudo.items()
-                    if neuron not in to_remove
-                }
-            if subsample_ratio < 1:
-                to_remove = np.random.choice(
-                    neurons,
-                    size=int((1 - subsample_ratio) * len(neurons)),
-                    replace=False,
-                )
-                pseudo = {
-                    neuron: df
-                    for neuron, df in pseudo.items()
-                    if neuron not in to_remove
-                }
-
-            # estimate accuracies for each spike window
-            for window in spike_rate_cols:
-                # gather data
-                X, y = {}, None
-                for neuron, df in pseudo.items():
-                    X[neuron] = np.asarray(df[window])
-                    if y is None:
-                        y = df[variable_col]
-                X = pd.DataFrame(X)
-
-                # cross-validate
-                cv_results = cross_validate(
-                    model, X, y, cv=cv, n_jobs=n_jobs, return_estimator=True
-                )
-                cv_accuracies = cv_results["test_score"]
-                accuracies[window].extend(cv_accuracies)
-                if return_weights:
-                    cv_weights = [
-                        pd.Series(cv_model["clf"].coef_[0], index=X.columns)
-                        for cv_model in cv_results["estimator"]
-                    ]
-                    weights[window].extend(cv_weights)
-
-                # perform permutation tests
-                for _ in range(n_permute):
-                    null_scores = cross_val_score(
-                        model,
-                        X,
-                        np.random.permutation(y),
-                        cv=cv,
-                        n_jobs=n_jobs,
-                    )
-                    null_accuracies[window].extend(null_scores)
-
-                # update progress bar
-                if show_progress:
-                    if show_accuracy and i % 25 == 0:
-                        acc_ave[window] = np.mean(accuracies[window])
-                    pbar.update()
-
+    with mp.Pool(n_jobs) as pool:
+        pbar = tqdm(total=n_samples, disable=not show_progress)
+        all_results = []
+        func = partial(
+            _pop_decode_var_helper,
+            data,
+            spike_rate_cols,
+            variable_col,
+            min_trials,
+            subsample_ratio,
+            n_splits,
+            n_permute,
+            return_weights,
+        )
+        for results in pool.imap_unordered(func, range(n_samples), chunksize=chunksize):
+            all_results.append(results)
             if show_progress:
-                progress = {
-                    "n_trials": min_trials,
-                    "n_selected": f"{len(X.columns)}/{len(neurons)}",
-                }
-                if show_accuracy:
-                    progress.update(acc_ave)
-                pbar.set_postfix(progress)
+                pbar.update()
+        pbar.close()
+
+    # gather results
+    for results in all_results:
+        for k, v in results["accuracies"].items():
+            accuracies[k].extend(v)
+        if n_permute > 0:
+            for k, v in results["null_accuracies"].items():
+                null_accuracies[k].extend(v)
+        if return_weights:
+            for k, v in results["weights"].items():
+                weights[k].extend(v)
 
     # convert results to dataframe
     accuracies = pd.DataFrame(accuracies)
@@ -525,11 +591,9 @@ def pop_decode_var(
         weights = pd.concat(tmp)
 
     # return results
-    if n_permute > 0 and return_weights:
-        return accuracies, null_accuracies, weights
-    elif n_permute > 0:
-        return accuracies, null_accuracies
-    elif return_weights:
-        return accuracies, weights
-    else:
-        return accuracies
+    results = {"accuracies": accuracies}
+    if n_permute > 0:
+        results["null_accuracies"] = null_accuracies
+    if return_weights:
+        results["weights"] = weights
+    return results
