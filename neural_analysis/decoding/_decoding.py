@@ -10,6 +10,129 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
 
+def _decode_cross_cond_and_time_helper(
+    data: pd.DataFrame,
+    spike_rate_cols: list[str],
+    variable_col: str,
+    condition_col: str,
+    min_trials: int,
+    subsample_ratio: float,
+    n_permute: int,
+    cond_grp_1: list[Any],
+    cond_grp_2: list[Any],
+    same_cond_only: bool,
+    skip_same_time: bool,
+    return_weights: bool,
+    *args,
+) -> dict[str:dict]:
+
+    # initialize variables
+    accuracies = []
+    if n_permute > 0:
+        null_accuracies = []
+    if return_weights:
+        weights = []
+
+    # define decoding model
+    model = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("clf", LinearSVC()),
+        ]
+    )
+    null_model = model.clone()
+
+    # generate random pseudo-population
+    pop = {
+        neuron: df.groupby([variable_col, condition_col])
+        .sample(n=min_trials)
+        .reset_index(drop=True)
+        for neuron, df in data.items()
+    }
+
+    # select random subset of neurons
+    neurons = list(pop.keys())
+    if subsample_ratio < 1:
+        to_remove = np.random.choice(
+            neurons,
+            size=int((1 - subsample_ratio) * len(neurons)),
+            replace=False,
+        )
+        pop = {neuron: df for neuron, df in pop.items() if neuron not in to_remove}
+
+    # preprocessing
+    df = next(pop.values())
+    y, cond = df[variable_col], df[condition_col]
+
+    for c1, c2 in product(cond_grp_1, cond_grp_2):
+        if same_cond_only and c1 != c2:
+            continue
+
+        # train/test split
+        train_mask = cond != c1 & cond != c2
+        test_mask = cond == c1 | cond == c2
+
+        # estimate accuracies across spike time periods
+        for train_period in spike_rate_cols:
+            # gather base data
+            X_base = {
+                neuron: np.asarray(df[train_period]) for neuron, df in pop.items()
+            }
+            X_base = pd.DataFrame(X_base)
+            model.fit(X_base[train_mask], y[train_mask])
+            if return_weights:
+                curr_weights = {
+                    neuron: coef for neuron, coef in zip(neurons, model["clf"].coef_[0])
+                }
+                curr_weights["train_period"] = train_period
+                curr_weights["test_cond_v1"] = c1
+                curr_weights["test_cond_v2"] = c2
+                weights.append(curr_weights)
+
+            for test_period in spike_rate_cols:
+                if skip_same_time and train_period == test_period:
+                    continue
+
+                # gather comparison data
+                X_other = {
+                    neuron: np.asarray(df[test_period]) for neuron, df in pop.items()
+                }
+                X_other = pd.DataFrame(X_other)
+                accuracies.append(
+                    {
+                        "accuracy": model.score(X_other[test_mask], y[test_mask]),
+                        "train_period": train_period,
+                        "test_period": test_period,
+                        "test_cond_v1": c1,
+                        "test_cond_v2": c2,
+                    }
+                )
+
+                # perform permutation tests
+                for _ in range(n_permute):
+                    y_perm = np.random.permutation(y)
+                    null_model.fit(X_base[train_mask], y_perm[train_mask])
+                    null_accuracies.append(
+                        {
+                            "accuracy": null_model.score(
+                                X_other[test_mask], y_perm[test_mask]
+                            ),
+                            "train_period": train_period,
+                            "test_period": test_period,
+                            "test_cond_v1": c1,
+                            "test_cond_v2": c2,
+                        }
+                    )
+
+    # return results
+    results = {"accuracies": accuracies}
+    if n_permute > 0:
+        results["null_accuracies"] = null_accuracies
+    if return_weights:
+        results["weights"] = weights
+    return results
+
+
 def _decode_cross_cond_helper(
     data: pd.DataFrame,
     spike_rate_cols: list[str],
@@ -20,16 +143,17 @@ def _decode_cross_cond_helper(
     n_permute: int,
     cond_grp_1: list[Any],
     cond_grp_2: list[Any],
+    same_cond_only: bool,
     return_weights: bool,
     *args,
 ) -> dict[str:dict]:
 
     # initialize variables
-    accuracies = defaultdict(list)
+    accuracies = []
     if n_permute > 0:
-        null_accuracies = defaultdict(list)
+        null_accuracies = []
     if return_weights:
-        weights = defaultdict(list)
+        weights = []
 
     # define decoding model
     model = Pipeline(
@@ -68,26 +192,68 @@ def _decode_cross_cond_helper(
                 cond = df[condition_col]
         X = pd.DataFrame(X)
 
+        # # estimate accuracies for each cross-condition split
+        # for c1, c2 in product(cond_grp_1, cond_grp_2):
+        #     if skip_same_cond and c1 == c2:
+        #         continue
+
+        #     c1_ind, c2_ind = (cond == c1), (cond == c2)
+        #     X_train, y_train = X[~c1_ind & ~c2_ind], y[~c1_ind & ~c2_ind]
+        #     X_test, y_test = X[c1_ind | c2_ind], y[c1_ind | c2_ind]
+        #     model.fit(X_train, y_train)
+        #     accuracies[period].append(model.score(X_test, y_test))
+        #     if return_weights:
+        #         weights[period].append(
+        #             pd.Series(model["clf"].coef_[0], index=X_train.columns)
+        #         )
+
+        #     # perform geometric permutation tests
+        #     for _ in range(n_permute):
+        #         X_c1 = X[c1_ind].sample(frac=1, axis=1)
+        #         X_c2 = X[c2_ind].sample(frac=1, axis=1)
+        #         X_c1.columns = X.columns
+        #         X_c2.columns = X.columns
+        #         X_test = pd.concat([X_c1, X_c2])
+        #         null_accuracies[period].append(model.score(X_test, y_test))
+
         # estimate accuracies for each cross-condition split
         for c1, c2 in product(cond_grp_1, cond_grp_2):
-            c1_ind, c2_ind = (cond == c1), (cond == c2)
-            X_train, y_train = X[~c1_ind & ~c2_ind], y[~c1_ind & ~c2_ind]
-            X_test, y_test = X[c1_ind | c2_ind], y[c1_ind | c2_ind]
-            model.fit(X_train, y_train)
-            accuracies[period].append(model.score(X_test, y_test))
-            if return_weights:
-                weights[period].append(
-                    pd.Series(model["clf"].coef_[0], index=X_train.columns)
-                )
+            if same_cond_only and c1 != c2:
+                continue
 
-            # perform geometric permutation tests
+            # train/test split
+            train_mask = cond != c1 & cond != c2
+            test_mask = cond == c1 | cond == c2
+            model.fit(X[train_mask], y[train_mask])
+            accuracies.append(
+                {
+                    "accuracy": model.score(X[test_mask], y[test_mask]),
+                    "period": period,
+                    "test_cond_v1": c1,
+                    "test_cond_v2": c2,
+                }
+            )
+            if return_weights:
+                curr_weights = {
+                    neuron: coef for neuron, coef in zip(neurons, model["clf"].coef_[0])
+                }
+                curr_weights["period"] = period
+                curr_weights["test_cond_v1"] = c1
+                curr_weights["test_cond_v2"] = c2
+                weights.append(curr_weights)
+
+            # perform permutation tests
             for _ in range(n_permute):
-                X_c1 = X[c1_ind].sample(frac=1, axis=1)
-                X_c2 = X[c2_ind].sample(frac=1, axis=1)
-                X_c1.columns = X.columns
-                X_c2.columns = X.columns
-                X_test = pd.concat([X_c1, X_c2])
-                null_accuracies[period].append(model.score(X_test, y_test))
+                y_perm = np.random.permutation(y)
+                model.fit(X[train_mask], y_perm[train_mask])
+                null_accuracies.append(
+                    {
+                        "accuracy": model.score(X[test_mask], y_perm[test_mask]),
+                        "period": period,
+                        "test_cond_v1": c1,
+                        "test_cond_v2": c2,
+                    }
+                )
 
     # return results
     results = {"accuracies": accuracies}
@@ -106,17 +272,17 @@ def _decode_cross_time_helper(
     subsample_ratio: float,
     n_splits: int,
     n_permute: int,
-    skip_self: bool,
+    skip_same_time: bool,
     return_weights: bool,
     *args,
 ) -> dict[str:dict]:
 
     # initialize variables
-    accuracies = defaultdict(list)
+    accuracies = []
     if n_permute > 0:
-        null_accuracies = defaultdict(list)
+        null_accuracies = []
     if return_weights:
-        weights = defaultdict(list)
+        weights = []
 
     # define decoding model
     model = Pipeline(
@@ -125,6 +291,7 @@ def _decode_cross_time_helper(
             ("clf", LinearSVC()),
         ]
     )
+    null_model = model.clone()
     cv = StratifiedKFold(n_splits=n_splits)
 
     # generate random pseudo-population
@@ -143,47 +310,59 @@ def _decode_cross_time_helper(
         )
         pop = {neuron: df for neuron, df in pop.items() if neuron not in to_remove}
 
-    # estimate accuracies across each pair of spike windows
-    for window1 in spike_rate_cols:
+    # estimate accuracies across each pair of spike time period
+    for train_period in spike_rate_cols:
         # gather base data
         X_base, y = {}, None
         for neuron, df in pop.items():
-            X_base[neuron] = np.asarray(df[window1])
+            X_base[neuron] = np.asarray(df[train_period])
             if y is None:
                 y = df[variable_col]
         X_base = pd.DataFrame(X_base)
 
-        # estimate accuracies for each other spike window
-        for window2 in spike_rate_cols:
-            if skip_self and window1 == window2:
-                continue
-            name = f"{window1} → {window2}"
+        # cross-temporal cross-validation
+        for train_idx, test_idx in cv.split(X_base, y):
+            model.fit(X_base.iloc[train_idx], y.iloc[train_idx])
+            if return_weights:
+                curr_weights = {
+                    neuron: coef for neuron, coef in zip(neurons, model["clf"].coef_[0])
+                }
+                curr_weights["train_period"] = train_period
+                weights.append(curr_weights)
 
-            # gather comparison data
-            X_other = {neuron: np.asarray(df[window2]) for neuron, df in pop.items()}
-            X_other = pd.DataFrame(X_other)
+            # estimate generalization to every other spike window
+            for test_period in spike_rate_cols:
+                if skip_same_time and train_period == test_period:
+                    continue
 
-            # cross-temporal cross-validate
-            for train_idx, test_idx in cv.split(X_base, y):
-                X_train = X_base.iloc[train_idx]
-                X_test = X_other.iloc[test_idx]
-                model.fit(X_train, y.iloc[train_idx])
-                accuracy = model.score(X_test, y.iloc[test_idx])
-                accuracies[name].append(accuracy)
-                if return_weights:
-                    weights[name].append(
-                        pd.Series(model["clf"].coef_[0], index=X_train.columns)
+                # gather comparison data
+                X_other = {
+                    neuron: np.asarray(df[test_period]) for neuron, df in pop.items()
+                }
+                X_other = pd.DataFrame(X_other)
+                accuracies.append(
+                    {
+                        "accuracy": model.score(
+                            X_other.iloc[test_idx], y.iloc[test_idx]
+                        ),
+                        "train_period": train_period,
+                        "test_period": test_period,
+                    }
+                )
+
+                # perform permutation tests
+                for _ in range(n_permute):
+                    y_perm = np.random.permutation(y)
+                    null_model.fit(X_base.iloc[train_idx], y_perm[train_idx])
+                    null_accuracies.append(
+                        {
+                            "accuracy": null_model.score(
+                                X_other.iloc[test_idx], y_perm[test_idx]
+                            ),
+                            "train_period": train_period,
+                            "test_period": test_period,
+                        }
                     )
-
-            # perform permutation tests
-            for _ in range(n_permute):
-                y_perm = np.random.permutation(y)
-                for train_idx, test_idx in cv.split(X_base, y_perm):
-                    X_train = X_base.iloc[train_idx]
-                    X_test = X_other.iloc[test_idx]
-                    model.fit(X_train, y_perm[train_idx])
-                    null_accuracy = model.score(X_test, y_perm[test_idx])
-                    null_accuracies[name].append(null_accuracy)
 
     # return results
     results = {"accuracies": accuracies}
@@ -207,11 +386,11 @@ def _decode_helper(
 ) -> dict[str:dict]:
 
     # initialize variables
-    accuracies = defaultdict(list)
+    accuracies = []
     if n_permute > 0:
-        null_accuracies = defaultdict(list)
+        null_accuracies = []
     if return_weights:
-        weights = defaultdict(list)
+        weights = []
 
     # define decoding model
     model = Pipeline(
@@ -238,12 +417,12 @@ def _decode_helper(
         )
         pop = {neuron: df for neuron, df in pop.items() if neuron not in to_remove}
 
-    # estimate accuracies for each spike window
-    for window in spike_rate_cols:
+    # estimate accuracies for each spike time period
+    for period in spike_rate_cols:
         # gather data
         X, y = {}, None
         for neuron, df in pop.items():
-            X[neuron] = np.asarray(df[window])
+            X[neuron] = np.asarray(df[period])
             if y is None:
                 y = df[variable_col]
         X = pd.DataFrame(X)
@@ -252,13 +431,13 @@ def _decode_helper(
         cv_results = cross_validate(
             model, X, y, cv=cv, n_jobs=1, return_estimator=return_weights
         )
-        accuracies[window].extend(cv_results["test_score"])
+        accuracies.append({"accuracy": cv_results["test_score"], "period": period})
         if return_weights:
-            cv_weights = [
-                pd.Series(cv_model["clf"].coef_[0], index=X.columns)
-                for cv_model in cv_results["estimator"]
-            ]
-            weights[window].extend(cv_weights)
+            cv_weights = {
+                neuron: coef for neuron, coef in zip(neurons, cv_results["estimator"])
+            }
+            cv_weights["period"] = period
+            weights.append(cv_weights)
 
         # perform permutation tests
         for _ in range(n_permute):
@@ -269,7 +448,7 @@ def _decode_helper(
                 cv=cv,
                 n_jobs=1,
             )
-            null_accuracies[window].extend(null_scores)
+            null_accuracies.append({"accuracy": null_scores, "period": period})
 
     # return results
     results = {"accuracies": accuracies}
