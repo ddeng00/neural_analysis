@@ -7,6 +7,24 @@ import pandas as pd
 from scipy.io import loadmat
 
 
+def remove_if_exists(path: Path | str) -> None:
+    """
+    Remove a file or directory if it exists.
+
+    Parameters
+    ----------
+    path : `pathlib.Path` or str
+        File or directory to be removed.
+    """
+
+    path = Path(path)
+    if path.exists() :
+        if path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            path.rmdir()
+
+
 def validate_file(path: Path | str) -> Path:
     """
     Validate a file path and return a `pathlib.Path` object.

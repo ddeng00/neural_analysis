@@ -252,8 +252,8 @@ def _pop_decode_var_cross_temp_helper(
                 for train_idx, test_idx in cv.split(X_base, y_perm):
                     X_train = X_base.iloc[train_idx]
                     X_test = X_other.iloc[test_idx]
-                    model.fit(X_train, y_perm.iloc[train_idx])
-                    null_accuracy = model.score(X_test, y_perm.iloc[test_idx])
+                    model.fit(X_train, y_perm[train_idx])
+                    null_accuracy = model.score(X_test, y_perm[test_idx])
                     null_accuracies[name].append(null_accuracy)
 
     # return results
