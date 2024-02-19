@@ -3,7 +3,6 @@ import os
 
 import numpy as np
 import numpy.typing as npt
-import scipy.stats as stats
 
 
 def _get_spikes_in_window(
