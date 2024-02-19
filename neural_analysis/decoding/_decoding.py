@@ -66,7 +66,7 @@ def _decode_cross_cond_and_time_helper(
         pop = {neuron: df for neuron, df in pop.items() if neuron not in to_remove}
 
     # preprocessing
-    df = next(pop.values())
+    df = next(iter(pop.values()))
     y, cond = df[variable_col], df[condition_col]
 
     for c1, c2 in product(cond_grp_1, cond_grp_2):
@@ -74,8 +74,8 @@ def _decode_cross_cond_and_time_helper(
             continue
 
         # train/test split
-        train_mask = cond != c1 & cond != c2
-        test_mask = cond == c1 | cond == c2
+        train_mask = (cond != c1) & (cond != c2)
+        test_mask = (cond == c1) | (cond == c2)
 
         # estimate accuracies across spike time periods
         for train_period in spike_rate_cols:
@@ -227,8 +227,8 @@ def _decode_cross_cond_helper(
                 continue
 
             # train/test split
-            train_mask = cond != c1 & cond != c2
-            test_mask = cond == c1 | cond == c2
+            train_mask = (cond != c1) & (cond != c2)
+            test_mask = (cond == c1) | (cond == c2)
             model.fit(X[train_mask], y[train_mask])
             accuracies.append(
                 {
@@ -446,8 +446,8 @@ def _decode_helper(
         )
         if return_weights:
             cv_weights = [
-                {neuron: coef for neuron, coef in zip(neurons, clf.coef_[0])}
-                for clf in cv_results["estimator"]
+                {neuron: coef for neuron, coef in zip(neurons, pip["clf"].coef_[0])}
+                for pip in cv_results["estimator"]
             ]
             for w in cv_weights:
                 w["period"] = period
