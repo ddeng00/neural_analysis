@@ -153,6 +153,13 @@ def decode_cross_cond_and_time(
                 pbar.update()
         pbar.close()
 
+    # convert results to dataframe
+    accuracies = pd.DataFrame.from_records(accuracies)
+    if n_permute > 0:
+        null_accuracies = pd.DataFrame.from_records(null_accuracies)
+    if return_weights:
+        weights = pd.DataFrame.from_records(weights)
+
     # return results
     results = {"accuracies": accuracies}
     if n_permute > 0:
@@ -291,6 +298,13 @@ def decode_cross_cond(
                 pbar.update()
         pbar.close()
 
+    # convert results to dataframe
+    accuracies = pd.DataFrame.from_records(accuracies)
+    if n_permute > 0:
+        null_accuracies = pd.DataFrame.from_records(null_accuracies)
+    if return_weights:
+        weights = pd.DataFrame.from_records(weights)
+
     # return results
     results = {"accuracies": accuracies}
     if n_permute > 0:
@@ -421,6 +435,13 @@ def decode_cross_time(
                 pbar.update()
         pbar.close()
 
+    # convert results to dataframe
+    accuracies = pd.DataFrame.from_records(accuracies)
+    if n_permute > 0:
+        null_accuracies = pd.DataFrame.from_records(null_accuracies)
+    if return_weights:
+        weights = pd.DataFrame.from_records(weights)
+
     # return results
     results = {"accuracies": accuracies}
     if n_permute > 0:
@@ -546,6 +567,13 @@ def decode(
             if show_progress:
                 pbar.update()
         pbar.close()
+
+    # convert results to dataframe
+    accuracies = pd.DataFrame.from_records(accuracies)
+    if n_permute > 0:
+        null_accuracies = pd.DataFrame.from_records(null_accuracies)
+    if return_weights:
+        weights = pd.DataFrame.from_records(weights)
 
     # return results
     results = {"accuracies": accuracies}

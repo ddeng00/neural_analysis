@@ -40,7 +40,12 @@ def _decode_cross_cond_and_time_helper(
             ("clf", LinearSVC()),
         ]
     )
-    null_model = model.clone()
+    null_model = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("clf", LinearSVC()),
+        ]
+    )
 
     # generate random pseudo-population
     pop = {
@@ -291,7 +296,12 @@ def _decode_cross_time_helper(
             ("clf", LinearSVC()),
         ]
     )
-    null_model = model.clone()
+    null_model = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("clf", LinearSVC()),
+        ]
+    )
     cv = StratifiedKFold(n_splits=n_splits)
 
     # generate random pseudo-population
@@ -431,13 +441,17 @@ def _decode_helper(
         cv_results = cross_validate(
             model, X, y, cv=cv, n_jobs=1, return_estimator=return_weights
         )
-        accuracies.append({"accuracy": cv_results["test_score"], "period": period})
+        accuracies.extend(
+            [{"accuracy": acc, "period": period} for acc in cv_results["test_score"]]
+        )
         if return_weights:
-            cv_weights = {
-                neuron: coef for neuron, coef in zip(neurons, cv_results["estimator"])
-            }
-            cv_weights["period"] = period
-            weights.append(cv_weights)
+            cv_weights = [
+                {neuron: coef for neuron, coef in zip(neurons, clf.coef_[0])}
+                for clf in cv_results["estimator"]
+            ]
+            for w in cv_weights:
+                w["period"] = period
+            weights.extend(cv_weights)
 
         # perform permutation tests
         for _ in range(n_permute):
@@ -448,7 +462,9 @@ def _decode_helper(
                 cv=cv,
                 n_jobs=1,
             )
-            null_accuracies.append({"accuracy": null_scores, "period": period})
+            null_accuracies.extend(
+                [{"accuracy": acc, "period": period} for acc in null_scores]
+            )
 
     # return results
     results = {"accuracies": accuracies}
