@@ -227,8 +227,9 @@ def _decode_cross_cond_helper(
                 continue
 
             # train/test split
-            train_mask = (cond != c1) & (cond != c2)
-            test_mask = (cond == c1) | (cond == c2)
+            c1_idx, c2_idx = (cond == c1), (cond == c2)
+            train_mask = ~c1_idx & ~c2_idx
+            test_mask = c1_idx | c2_idx
             model.fit(X[train_mask], y[train_mask])
             accuracies.append(
                 {

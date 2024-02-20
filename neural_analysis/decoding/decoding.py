@@ -1,4 +1,3 @@
-from collections import defaultdict
 from functools import partial
 import multiprocessing as mp
 from os import cpu_count

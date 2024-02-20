@@ -22,9 +22,9 @@ def _coding_similarity_cross_cond_helper(
 ) -> dict[str:dict]:
 
     # initialize variables
-    similarities = defaultdict(list)
+    similarities = []
     if n_permute > 0:
-        null_similarities = defaultdict(list)
+        null_similarities = []
 
     # generate random pseudo-population
     pop = {
@@ -63,13 +63,29 @@ def _coding_similarity_cross_cond_helper(
             X_r1, X_r2 = X[cond == r1].mean(), X[cond == r2].mean()
             v1 = X_r1.to_numpy() - X_l1.to_numpy()
             v2 = X_r2.to_numpy() - X_l2.to_numpy()
-            similarities[period].append(1 - cosine(v1, v2))
+            similarities.append(
+                {
+                    "period": period,
+                    "cond_vec_1": (l1, r1),
+                    "cond_vec_2": (l2, r2),
+                    "similarity": 1 - cosine(v1, v2),
+                }
+            )
 
             # perform geometric permutation tests
             for _ in range(n_permute):
-                v1 = X_r1.sample(frac=1).to_numpy() - X_l1.sample(frac=1).to_numpy()
-                v2 = X_r2.sample(frac=1).to_numpy() - X_l2.sample(frac=1).to_numpy()
-                null_similarities[period].append(1 - cosine(v1, v2))
+                X_l1, X_l2 = X_l1.sample(frac=1, axis=1), X_l2.sample(frac=1, axis=1)
+                X_r1, X_r2 = X_r1.sample(frac=1, axis=1), X_r2.sample(frac=1, axis=1)
+                v1 = X_r1.to_numpy() - X_l1.to_numpy()
+                v2 = X_r2.to_numpy() - X_l2.to_numpy()
+                null_similarities.append(
+                    {
+                        "period": period,
+                        "cond_vec_1": (l1, r1),
+                        "cond_vec_2": (l2, r2),
+                        "similarity": 1 - cosine(v1, v2),
+                    }
+                )
 
     # return results
     results = {"similarities": similarities}

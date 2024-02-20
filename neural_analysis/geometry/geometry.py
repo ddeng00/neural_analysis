@@ -1,4 +1,3 @@
-from collections import defaultdict
 from os import cpu_count
 import multiprocessing as mp
 from functools import partial
@@ -98,14 +97,13 @@ def coding_similarity_cross_cond(
     data = group_df_by(data, neuron_col)
 
     # initialize variables
-    similarities = defaultdict(list)
+    similarities = []
     if n_permute > 0:
-        null_similarities = defaultdict(list)
+        null_similarities = []
 
     # start analysis
     with mp.Pool(n_jobs) as pool:
         pbar = tqdm(total=n_samples, disable=not show_progress)
-        all_results = []
         func = partial(
             _coding_similarity_cross_cond_helper,
             data,
@@ -119,18 +117,12 @@ def coding_similarity_cross_cond(
             cond_grp_2,
         )
         for results in pool.imap_unordered(func, range(n_samples), chunksize=chunksize):
-            all_results.append(results)
+            similarities.extend(results["similarities"])
+            if n_permute > 0:
+                null_similarities.extend(results["null_similarities"])
             if show_progress:
                 pbar.update()
         pbar.close()
-
-    # gather results
-    for results in all_results:
-        for k, v in results["accuracies"].items():
-            similarities[k].extend(v)
-        if n_permute > 0:
-            for k, v in results["null_accuracies"].items():
-                null_similarities[k].extend(v)
 
     # convert results to dataframe
     similarities = pd.DataFrame(similarities)
