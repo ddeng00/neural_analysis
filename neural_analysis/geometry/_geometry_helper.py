@@ -59,8 +59,8 @@ def _coding_similarity_cross_cond_helper(
         # estimate cosine similarity for each pair of cross-conditional variable coding vectors
         left, right = permutations(cond_grp_1, 2), permutations(cond_grp_2, 2)
         for (l1, l2), (r1, r2) in product(left, right):
-            X_l1, X_l2 = X[cond == l1].mean(), X[cond == l2].mean()
-            X_r1, X_r2 = X[cond == r1].mean(), X[cond == r2].mean()
+            X_l1, X_l2 = X[cond == l1].mean(axis=0), X[cond == l2].mean(axis=0)
+            X_r1, X_r2 = X[cond == r1].mean(axis=0), X[cond == r2].mean(axis=0)
             v1 = X_r1.to_numpy() - X_l1.to_numpy()
             v2 = X_r2.to_numpy() - X_l2.to_numpy()
             similarities.append(
@@ -74,8 +74,8 @@ def _coding_similarity_cross_cond_helper(
 
             # perform geometric permutation tests
             for _ in range(n_permute):
-                X_l1, X_l2 = X_l1.sample(frac=1, axis=1), X_l2.sample(frac=1, axis=1)
-                X_r1, X_r2 = X_r1.sample(frac=1, axis=1), X_r2.sample(frac=1, axis=1)
+                X_l1, X_l2 = X_l1.sample(frac=1), X_l2.sample(frac=1)
+                X_r1, X_r2 = X_r1.sample(frac=1), X_r2.sample(frac=1)
                 v1 = X_r1.to_numpy() - X_l1.to_numpy()
                 v2 = X_r2.to_numpy() - X_l2.to_numpy()
                 null_similarities.append(
