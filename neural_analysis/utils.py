@@ -18,7 +18,7 @@ def remove_if_exists(path: Path | str) -> None:
     """
 
     path = Path(path)
-    if path.exists() :
+    if path.exists():
         if path.is_file():
             path.unlink()
         elif path.is_dir():
@@ -121,7 +121,7 @@ def group_df_by(
     df: pd.DataFrame,
     by: str | list[str],
     drop: bool = True,
-) -> dict[str, pd.DataFrame | pd.Series | pd.Index]:
+) -> dict[str, pd.DataFrame | pd.Series]:
     """
     Group a `pandas.DataFrame` by column(s) and return a dictionary of groups.
 
@@ -136,24 +136,16 @@ def group_df_by(
 
     Returns
     -------
-    groups : dict of {str : `pandas.DataFrame` or `pandas.Series` or `pandas.Index`}
+    df : dict of {str : `pandas.DataFrame` or `pandas.Series`}
         Dictionary of separated groups with group value(s) as keys.
     """
 
-    if isinstance(df, pd.DataFrame):
-        if by is None:
-            raise "Needs to specify at least one column."
-        groups = df.groupby(by).groups
-        if drop:
-            groups = {val: df.loc[idx].drop(by, axis=1) for val, idx in groups.items()}
-        else:
-            groups = {val: df.loc[idx] for val, idx in groups.items()}
-    elif isinstance(df, pd.Series):
-        groups = df.groupby(df).groups
-    else:
-        raise "Unsupported type."
-
-    return groups
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("Input must be a pandas DataFrame.")
+    df = dict(tuple(df.groupby(by)))
+    if drop:
+        df = {k: v.drop(by, axis=1) for k, v in df.items()}
+    return df
 
 
 def seq_where(arr: npt.ArrayLike, seq: npt.ArrayLike) -> npt.NDArray:
