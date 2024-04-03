@@ -37,13 +37,13 @@ def _decode_cross_cond_and_time_helper(
     model = Pipeline(
         [
             ("scaler", StandardScaler()),
-            ("clf", LinearSVC()),
+            ("clf", LinearSVC(dual="auto")),
         ]
     )
     null_model = Pipeline(
         [
             ("scaler", StandardScaler()),
-            ("clf", LinearSVC()),
+            ("clf", LinearSVC(dual="auto")),
         ]
     )
 
@@ -164,7 +164,7 @@ def _decode_cross_cond_helper(
     model = Pipeline(
         [
             ("scaler", StandardScaler()),
-            ("clf", LinearSVC()),
+            ("clf", LinearSVC(dual="auto")),
         ]
     )
 
@@ -185,41 +185,20 @@ def _decode_cross_cond_helper(
             replace=False,
         )
         pop = {neuron: df for neuron, df in pop.items() if neuron not in to_remove}
+    neurons = list(pop.keys())
 
     for period in spike_rate_cols:
         # gather base data
-        X, y, cond = {}, None, None
-        for neuron, df in pop.items():
-            X[neuron] = np.asarray(df[period])
+        X, y, cond = [], None, None
+        for _, df in pop.items():
+            X.append(np.asarray(df[period]).reshape(-1, 1))
             if y is None:
-                y = df[variable_col]
+                y = np.asarray(df[variable_col])
             if cond is None:
-                cond = df[condition_col]
-        X = pd.DataFrame(X)
-
-        # # estimate accuracies for each cross-condition split
-        # for c1, c2 in product(cond_grp_1, cond_grp_2):
-        #     if skip_same_cond and c1 == c2:
-        #         continue
-
-        #     c1_ind, c2_ind = (cond == c1), (cond == c2)
-        #     X_train, y_train = X[~c1_ind & ~c2_ind], y[~c1_ind & ~c2_ind]
-        #     X_test, y_test = X[c1_ind | c2_ind], y[c1_ind | c2_ind]
-        #     model.fit(X_train, y_train)
-        #     accuracies[period].append(model.score(X_test, y_test))
-        #     if return_weights:
-        #         weights[period].append(
-        #             pd.Series(model["clf"].coef_[0], index=X_train.columns)
-        #         )
-
-        #     # perform geometric permutation tests
-        #     for _ in range(n_permute):
-        #         X_c1 = X[c1_ind].sample(frac=1, axis=1)
-        #         X_c2 = X[c2_ind].sample(frac=1, axis=1)
-        #         X_c1.columns = X.columns
-        #         X_c2.columns = X.columns
-        #         X_test = pd.concat([X_c1, X_c2])
-        #         null_accuracies[period].append(model.score(X_test, y_test))
+                cond = np.asarray(df[condition_col])
+        X = np.concatenate(X, axis=1)
+        cond_masks = {cond_val: cond == cond_val for cond_val in np.unique(cond)}
+        n_neurons = X.shape[1]
 
         # estimate accuracies for each cross-condition split
         for c1, c2 in product(cond_grp_1, cond_grp_2):
@@ -227,9 +206,8 @@ def _decode_cross_cond_helper(
                 continue
 
             # train/test split
-            c1_idx, c2_idx = (cond == c1), (cond == c2)
-            train_mask = ~c1_idx & ~c2_idx
-            test_mask = c1_idx | c2_idx
+            train_mask = ~cond_masks[c1] & ~cond_masks[c2]
+            test_mask = cond_masks[c1] | cond_masks[c2]
             model.fit(X[train_mask], y[train_mask])
             accuracies.append(
                 {
@@ -250,6 +228,23 @@ def _decode_cross_cond_helper(
 
             # perform permutation tests
             for _ in range(n_permute):
+
+                # # geometric
+                # X_perm = X.copy()
+                # for mask in cond_masks.values():
+                #     r_order = np.random.permutation(n_neurons)
+                #     X_perm[mask] = X_perm[mask][:, r_order]
+                # model.fit(X_perm[train_mask], y[train_mask])
+                # null_accuracies.append(
+                #     {
+                #         "accuracy": model.score(X_perm[test_mask], y[test_mask]),
+                #         "period": period,
+                #         "test_cond_v1": c1,
+                #         "test_cond_v2": c2,
+                #     }
+                # )
+
+                # normal
                 y_perm = np.random.permutation(y)
                 model.fit(X[train_mask], y_perm[train_mask])
                 null_accuracies.append(
@@ -271,7 +266,7 @@ def _decode_cross_cond_helper(
 
 
 def _decode_cross_time_helper(
-    data: pd.DataFrame,
+    data: dict[str : pd.DataFrame],
     spike_rate_cols: list[str],
     variable_col: str,
     min_trials: int,
@@ -294,13 +289,13 @@ def _decode_cross_time_helper(
     model = Pipeline(
         [
             ("scaler", StandardScaler()),
-            ("clf", LinearSVC()),
+            ("clf", LinearSVC(dual="auto")),
         ]
     )
     null_model = Pipeline(
         [
             ("scaler", StandardScaler()),
-            ("clf", LinearSVC()),
+            ("clf", LinearSVC(dual="auto")),
         ]
     )
     cv = StratifiedKFold(n_splits=n_splits)
@@ -407,7 +402,7 @@ def _decode_helper(
     model = Pipeline(
         [
             ("scaler", StandardScaler()),
-            ("clf", LinearSVC()),
+            ("clf", LinearSVC(dual="auto")),
         ]
     )
     cv = StratifiedKFold(n_splits=n_splits)

@@ -371,10 +371,8 @@ def decode_cross_time(
     """
 
     # check input
-    if len(spike_rate_cols) < 2:
-        raise ValueError(
-            "At least two spike rate columns are required for cross-temporal comparison."
-        )
+    if isinstance(spike_rate_cols, str):
+        spike_rate_cols = [spike_rate_cols]
     for col in spike_rate_cols:
         if col not in data.columns:
             raise ValueError(f"Column '{col}' not found in data.")

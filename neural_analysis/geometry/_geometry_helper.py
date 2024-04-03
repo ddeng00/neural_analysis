@@ -1,5 +1,4 @@
-from collections import defaultdict
-from itertools import product, permutations
+from itertools import product, permutations, combinations
 from typing import Any
 
 import numpy as np
@@ -43,49 +42,55 @@ def _coding_similarity_cross_cond_helper(
             replace=False,
         )
         pop = {neuron: df for neuron, df in pop.items() if neuron not in to_remove}
+    neurons = list(pop.keys())
 
     for period in spike_rate_cols:
-        # gather base data
-        X, y, cond = {}, None, None
-        for neuron, df in pop.items():
-            X[neuron] = np.asarray(df[period])
+        X, y, cond = [], None, None
+        for _, df in pop.items():
+            X.append(np.asarray(df[period]).reshape(-1, 1))
             if y is None:
-                y = df[variable_col]
+                y = np.asarray(df[variable_col])
             if cond is None:
-                cond = df[condition_col]
-        X = pd.DataFrame(X)
-        X.loc[:, :] = StandardScaler().fit_transform(X)
+                cond = np.asarray(df[condition_col])
+        X = np.concatenate(X, axis=1)
+        cond_masks = {cond_val: cond == cond_val for cond_val in np.unique(cond)}
+        n_neurons = X.shape[1]
 
-        # estimate cosine similarity for each pair of cross-conditional variable coding vectors
-        left, right = permutations(cond_grp_1, 2), permutations(cond_grp_2, 2)
-        for (l1, l2), (r1, r2) in product(left, right):
-            X_l1, X_l2 = X[cond == l1].mean(axis=0), X[cond == l2].mean(axis=0)
-            X_r1, X_r2 = X[cond == r1].mean(axis=0), X[cond == r2].mean(axis=0)
-            v1 = X_r1.to_numpy() - X_l1.to_numpy()
-            v2 = X_r2.to_numpy() - X_l2.to_numpy()
-            similarities.append(
-                {
-                    "period": period,
-                    "cond_vec_1": (l1, r1),
-                    "cond_vec_2": (l2, r2),
-                    "similarity": 1 - cosine(v1, v2),
-                }
+        # estimate cosine similarity for each pairing of cross-conditional variable coding vectors
+        scaler = StandardScaler()
+        sims, nulls = [], [[] for _ in range(n_permute)]
+        for cond_grp_2_i in permutations(cond_grp_2):
+            X_fit = scaler.fit_transform(X)
+            vecs = [
+                np.mean(X_fit[cond_masks[r]], axis=0)
+                - np.mean(X_fit[cond_masks[l]], axis=0)
+                for l, r in zip(cond_grp_1, cond_grp_2_i)
+            ]
+            sims.append(
+                np.mean([1 - cosine(v1, v2) for v1, v2 in combinations(vecs, 2)])
             )
 
             # perform geometric permutation tests
-            for _ in range(n_permute):
-                X_l1, X_l2 = X_l1.sample(frac=1), X_l2.sample(frac=1)
-                X_r1, X_r2 = X_r1.sample(frac=1), X_r2.sample(frac=1)
-                v1 = X_r1.to_numpy() - X_l1.to_numpy()
-                v2 = X_r2.to_numpy() - X_l2.to_numpy()
-                null_similarities.append(
-                    {
-                        "period": period,
-                        "cond_vec_1": (l1, r1),
-                        "cond_vec_2": (l2, r2),
-                        "similarity": 1 - cosine(v1, v2),
-                    }
+            for i in range(n_permute):
+                X_perm = X.copy()
+                for mask in cond_masks.values():
+                    r_order = np.random.permutation(n_neurons)
+                    X_perm[mask] = X_perm[mask][:, r_order]
+                X_perm = scaler.fit_transform(X_perm)
+                vecs = [
+                    np.mean(X_perm[cond_masks[r]], axis=0)
+                    - np.mean(X_perm[cond_masks[l]], axis=0)
+                    for l, r in zip(cond_grp_1, cond_grp_2_i)
+                ]
+                nulls[i].append(
+                    np.mean([1 - cosine(v1, v2) for v1, v2 in combinations(vecs, 2)])
                 )
+
+        # store results
+        similarities.append({"period": period, "similarity": max(sims)})
+        null_similarities.extend(
+            [{"period": period, "similarity": max(null)} for null in nulls]
+        )
 
     # return results
     results = {"similarities": similarities}

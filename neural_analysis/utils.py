@@ -181,7 +181,10 @@ def seq_where(arr: npt.ArrayLike, seq: npt.ArrayLike) -> npt.NDArray:
 
 
 def generate_group_names(
-    vars: list[npt.ArrayLike], var_names: list[str], keep_name: bool = True
+    vars: list[npt.ArrayLike],
+    var_names: list[str],
+    keep_name: bool = True,
+    separator: str = " | ",
 ) -> list[str]:
     """
     Generate group labels for all combinations of variables.
@@ -194,6 +197,8 @@ def generate_group_names(
         A list of names of each variable.
     keep_name : bool, default=True
         Whether to include the variable name in the group label.
+    separator : str, default=" | "
+        Separator to use between variable names and values.
 
     Returns
     -------
@@ -212,11 +217,11 @@ def generate_group_names(
     vars = [var.astype(int) if var.dtype == bool else var for var in vars]
 
     if keep_name:
-        combiner = lambda var_set: " | ".join(
+        combiner = lambda var_set: separator.join(
             [f"{col}={var}" for var, col in zip(var_set, var_names)]
         )
     else:
-        combiner = lambda var_set: " | ".join([f"{var}" for var in var_set])
+        combiner = lambda var_set: separator.join([f"{var}" for var in var_set])
     group_names = [combiner(set) for set in zip(*vars)]
 
     return group_names
@@ -229,6 +234,7 @@ def make_new_groups(
     group_name: str = "new_group",
     keep_name: bool = True,
     inplace: bool = False,
+    separator: str = " | ",
 ) -> pd.DataFrame | None:
     """
     Add new group labels to `pandas.DataFrame` based on column values.
@@ -248,7 +254,8 @@ def make_new_groups(
         Whether to include the variable name in the group label.
     inplace : bool, default=False
         Whether to modify `df` in-place. If False, a copy is returned.
-
+    separator : str, default=" | "
+        
     Returns
     -------
     df : `pandas.DataFrame` or None
@@ -265,7 +272,7 @@ def make_new_groups(
         column_names = columns
 
     df[group_name] = generate_group_names(
-        [df[col] for col in columns], column_names, keep_name
+        [df[col] for col in columns], column_names, keep_name=keep_name, separator=separator
     )
 
     if not inplace:
