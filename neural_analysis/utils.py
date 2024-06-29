@@ -255,7 +255,7 @@ def make_new_groups(
     inplace : bool, default=False
         Whether to modify `df` in-place. If False, a copy is returned.
     separator : str, default=" | "
-        
+
     Returns
     -------
     df : `pandas.DataFrame` or None
@@ -272,7 +272,10 @@ def make_new_groups(
         column_names = columns
 
     df[group_name] = generate_group_names(
-        [df[col] for col in columns], column_names, keep_name=keep_name, separator=separator
+        [df[col] for col in columns],
+        column_names,
+        keep_name=keep_name,
+        separator=separator,
     )
 
     if not inplace:
