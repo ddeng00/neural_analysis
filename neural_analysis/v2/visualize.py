@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import numpy.typing as npt
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -349,10 +350,10 @@ def plot_spikes_with_PSTH(
 
 
 def plot_metrics(
-    data: npt.ArrayLike,
+    data: pd.DataFrame,
     metric: str,
     *,
-    null: npt.ArrayLike | None = None,
+    null: pd.DataFrame | None = None,
     x_group: str | None = None,
     y_group: str | None = None,
     x_order: npt.ArrayLike | None = None,

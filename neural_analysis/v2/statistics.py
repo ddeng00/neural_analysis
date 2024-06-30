@@ -56,7 +56,7 @@ def binomial_test(k: int, n: int, p: float, alternative: str = "greater") -> flo
     if alternative == "two-sided":
         pvalue = 2 * min(binom.cdf(k, n, p), 1 - binom.cdf(k - 1, n, p))
     elif alternative == "greater":
-        pvalue = 1 - binom.cdf(k, n, p)
+        pvalue = 1 - binom.cdf(k - 1, n, p)
     elif alternative == "less":
         pvalue = binom.cdf(k, n, p)
     else:
