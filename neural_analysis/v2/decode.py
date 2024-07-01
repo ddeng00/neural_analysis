@@ -3,10 +3,10 @@ from itertools import combinations, permutations
 
 import numpy as np
 import numpy.typing as npt
-from sklearn.linear_model._base import LinearClassifierMixin
+from sklearn.base import ClassifierMixin
+from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
-from sklearn.svm import LinearSVC
 from sklearn.model_selection import cross_validate, cross_val_score
 from scipy.spatial.distance import cosine
 
@@ -22,11 +22,11 @@ def balanced_decoding(
     y: npt.ArrayLike,
     *,
     conditions: npt.ArrayLike | None = None,
-    clf: LinearClassifierMixin = LinearSVC,
+    clf: ClassifierMixin = SVC,
     n_splits: int = 5,
     n_repeats: int = 1,
     shuffle: bool = False,
-    clf_kwargs: dict | None = None,
+    clf_kwargs: dict | None = {"kernel": "linear"},
     return_weights: bool = False,
     n_jobs: int | None = None,
     random_state: int | np.random.RandomState | None = None,
@@ -42,7 +42,7 @@ def balanced_decoding(
         Target labels.
     conditions : array-like of shape (n_samples, n_conditions) or None, default=None
         Group labels for the samples used while splitting the dataset into train/test set.
-    clf : `sklearn.base.LinearClassifierMixin`, default=`sklearn.svm.LinearSVC`
+    clf : `sklearn.base.ClassifierMixin`, default=`sklearn.svm.SVC`
         Classifier to use.
     n_splits : int, default=5
         Number of folds.
@@ -104,8 +104,8 @@ def pairwise_generalization(
     xs: list[npt.ArrayLike],
     ys: list[npt.ArrayLike],
     *,
-    clf: LinearClassifierMixin = LinearSVC,
-    clf_kwargs: dict | None = None,
+    clf: ClassifierMixin = SVC,
+    clf_kwargs: dict | None = {"kernel": "linear"},
     skip_diagonal: bool = False,
 ) -> np.ndarray:
     """
@@ -117,7 +117,7 @@ def pairwise_generalization(
         List of feature matrices.
     ys : list of array-like of shape (n_samples,)
         List of target vectors.
-    clf : `sklearn.base.LinearClassifierMixin`, default=`sklearn.svm.LinearSVC`
+    clf : `sklearn.base.ClassifierMixin`, default=`sklearn.svm.SVC`
         Classifier to use.
     clf_kwargs : dict, optional
         Additional arguments to pass to the classifier.
@@ -149,9 +149,9 @@ def between_crossings_generalization(
     y: npt.ArrayLike,
     conditions: npt.ArrayLike,
     *,
-    clf: LinearClassifierMixin = LinearSVC,
+    clf: ClassifierMixin = SVC,
     n_crossings: int = 1,
-    clf_kwargs: dict | None = None,
+    clf_kwargs: dict | None = {"kernel": "linear"},
     n_jobs: int | None = None,
 ) -> np.ndarray:
     """
@@ -165,7 +165,7 @@ def between_crossings_generalization(
         Target vector.
     conditions : array-like of shape (n_samples,)
         Group labels for the samples used while splitting the dataset into train/test set.
-    clf : ClassifierMixin, default=LinearSVC
+    clf : ClassifierMixin, default=SVC
         Classifier to use.
     n_crossings : int, default=1
         Number of group crossings to leave out in each iteration.

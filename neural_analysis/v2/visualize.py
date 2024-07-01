@@ -359,8 +359,9 @@ def plot_metrics(
     x_order: npt.ArrayLike | None = None,
     y_order: npt.ArrayLike | None = None,
     y_emph: npt.ArrayLike | None = None,
-    test_significance: bool = False,
+    sig_test: bool = False,
     marker: str = "o",
+    chance: float = 0.5,
     ax: plt.Axes | None = None,
 ):
 
@@ -452,10 +453,10 @@ def plot_metrics(
         ax.set_xlim(old_xlim)
 
     # Plot chance level
-    ax.axhline(0.5, color="red", linestyle="--", zorder=0, label="Chance")
+    ax.axhline(chance, color="red", linestyle="--", zorder=0, label="Chance")
 
     # Plot significance test results
-    if x_group is not None and test_significance:
+    if x_group is not None and sig_test:
         x_test_base = np.mean(np.arange(len(x_order)))
         y_test = y_max + 0.05 * (y_max - y_min)
         if y_group is None:
@@ -485,11 +486,15 @@ def plot_metrics(
                 if p < 0.05 / len(np.unique(data[y_group])):
                     to_plot.append(cmap[i])
             x_tests = (
-                np.linspace(
-                    1 - len(to_plot) / 2.0, len(to_plot) / 2.0 - 1, len(to_plot)
+                (
+                    np.linspace(
+                        1 - len(to_plot) / 2.0, len(to_plot) / 2.0 - 1, len(to_plot)
+                    )
+                    * 0.25
+                    + x_test_base
                 )
-                * 0.25
-                + x_test_base
+                if len(to_plot) > 1
+                else [x_test_base]
             )
             for x, color in zip(x_tests, to_plot):
                 ax.text(

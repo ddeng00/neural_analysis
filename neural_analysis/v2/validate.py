@@ -100,30 +100,14 @@ def shuffle_data(
     x: npt.ArrayLike,
     y: npt.ArrayLike,
     groups: npt.ArrayLike,
-    *,
-    precomputed_group_masks: list[npt.ArrayLike] | None = None,
     random_state: int | np.random.RandomState | None = None,
 ):
     rng = check_random_state(random_state)
-    x, y = np.asarray(x), np.asarray(y)
-    if groups is not None:
-        groups = np.asarray(groups)
-
-    x_shuffled = x.copy()
-    if precomputed_group_masks is not None:
-        for group_mask in precomputed_group_masks:
-            x_group = x_shuffled[group_mask]
-            shuffled_inds = rng.permutation(x_group.shape[1])
-            x_shuffled[group_mask] = x_group[:, shuffled_inds]
-    else:
-        unique_groups = np.unique(groups)
-        for group in unique_groups:
-            group_mask = isin_2d(groups, group)
-            x_group = x_shuffled[group_mask]
-            shuffled_inds = rng.permutation(x_group.shape[1])
-            x_shuffled[group_mask] = x_group[:, shuffled_inds]
-
-    return x_shuffled, y, groups
+    x = np.copy(x)
+    for group in np.unique(groups, axis=0):
+        group_mask = isin_2d(groups, group)
+        x[group_mask] = x[group_mask][:, rng.permutation(x.shape[1])]
+    return x, y, groups
 
 
 def shuffle_class_labels(
