@@ -6,6 +6,15 @@ import numpy.typing as npt
 from scipy.io import loadmat
 
 
+def remove_subsets(lst: list[list]) -> list[list]:
+    lst = sorted(lst, key=len)
+    result = []
+    for i, x in enumerate(lst):
+        if not any(set(x).issubset(set(lst[j])) for j in range(i + 1, len(lst))):
+            result.append(x)
+    return result
+
+
 def remove_if_exists(path: Path | str) -> None:
     """
     Remove a file or directory if it exists.
@@ -116,27 +125,22 @@ def read_mat(path: Path | str) -> dict[str, list]:
     return {k: v for k, v in mat.items() if not k.startswith("__")}
 
 
-def create_rolling_windows(
-    starts: npt.ArrayLike,
-    ends: npt.ArrayLike,
-    window_size: float,
-    step_size: float,
-    *,
-    exclude_oob: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def create_rolling_window(
+    start: float, stop: float, step: float, width: float, exluce_oob=False
+):
     """
     Generate rolling windows based on the given start and end times.
 
     Parameters
     ----------
-    starts : array-like of shape (n_trials,)
-        Array of start times for each trial.
-    ends : array-like of shape (n_trials,)
-        Array of end times for each trial.
-    window_size : float
-        Size of each rolling window.
-    step_size : float
+    start : float
+        Start time.
+    stop : float
+        End time.
+    step : float
         Step size between consecutive windows.
+    width : float
+        Size of each rolling window.
     exclude_oob : bool, default=False
         If True, adjust windows to stay within the bounds of the trials.
 
@@ -149,27 +153,78 @@ def create_rolling_windows(
         - Array of center times for each rolling window.
     """
 
-    rolling_starts, rolling_ends, rolling_centers = [], [], []
-    half_win_size = window_size / 2
+    center = start
+    starts, ends, centers = [], [], []
+    half_width = width / 2
 
-    for start, end in zip(starts, ends):
-        center = start
-        w_starts, w_ends, w_times = [], [], []
-        while center <= end:
-            w_start = center - half_win_size
-            w_end = center + half_win_size
-            if exclude_oob:
-                w_start = max(w_start, start)
-                w_end = min(w_end, end)
-            w_starts.append(w_start)
-            w_ends.append(w_end)
-            w_times.append(center)
-            center += step_size
-        rolling_starts.append(w_starts)
-        rolling_ends.append(w_ends)
-        rolling_centers.append(w_times)
+    while center <= stop:
+        w_start = center - half_width
+        w_end = center + half_width
+        if exluce_oob:
+            w_start = max(w_start, start)
+            w_end = min(w_end, stop)
+        starts.append(w_start)
+        ends.append(w_end)
+        centers.append(center)
+        center += step
 
-    return rolling_starts, rolling_ends, rolling_centers
+    return np.array(starts), np.array(ends), np.array(centers)
+
+
+# def create_rolling_windows(
+#     starts: npt.ArrayLike,
+#     ends: npt.ArrayLike,
+#     window_size: float,
+#     step_size: float,
+#     *,
+#     exclude_oob: bool = False,
+# ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+#     """
+#     Generate rolling windows based on the given start and end times.
+
+#     Parameters
+#     ----------
+#     starts : array-like of shape (n_trials,)
+#         Array of start times for each trial.
+#     ends : array-like of shape (n_trials,)
+#         Array of end times for each trial.
+#     window_size : float
+#         Size of each rolling window.
+#     step_size : float
+#         Step size between consecutive windows.
+#     exclude_oob : bool, default=False
+#         If True, adjust windows to stay within the bounds of the trials.
+
+#     Returns
+#     -------
+#     tuple of `numpy.ndarray`
+#         A tuple containing:
+#         - Array of start times for each rolling window.
+#         - Array of end times for each rolling window.
+#         - Array of center times for each rolling window.
+#     """
+
+#     rolling_starts, rolling_ends, rolling_centers = [], [], []
+#     half_win_size = window_size / 2
+
+#     for start, end in zip(starts, ends):
+#         center = start
+#         w_starts, w_ends, w_times = [], [], []
+#         while center <= end:
+#             w_start = center - half_win_size
+#             w_end = center + half_win_size
+#             if exclude_oob:
+#                 w_start = max(w_start, start)
+#                 w_end = min(w_end, end)
+#             w_starts.append(w_start)
+#             w_ends.append(w_end)
+#             w_times.append(center)
+#             center += step_size
+#         rolling_starts.append(w_starts)
+#         rolling_ends.append(w_ends)
+#         rolling_centers.append(w_times)
+
+#     return rolling_starts, rolling_ends, rolling_centers
 
 
 def isin_2d(x1, x2):

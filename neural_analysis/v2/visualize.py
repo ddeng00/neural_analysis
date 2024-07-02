@@ -3,7 +3,8 @@ import pandas as pd
 import numpy.typing as npt
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.stats import sem, kruskal, f_oneway
+from scipy.stats import sem
+from statsmodels.stats.oneway import anova_oneway
 
 from .statistics import compute_confidence_interval
 
@@ -144,12 +145,13 @@ def plot_spikes(
 
 
 def plot_PSTH(
-    timestamps: npt.ArrayLike,
     spike_rates: npt.ArrayLike,
+    timestamps: npt.ArrayLike | None = None,
     *,
     group_labels: npt.ArrayLike | None = None,
     group_order: npt.ArrayLike | None = None,
     error_type: str | tuple[str, float] | None = ("ci", 95),
+    sig_test: bool = False,
     ax: plt.Axes | None = None,
 ) -> plt.Axes:
     """
@@ -161,10 +163,10 @@ def plot_PSTH(
 
     Parameters
     ----------
-    timestamps : array-like
-        An array of time points at which spike rates are measured.
     spike_rates : array-like
         A 2D array where each row contains the spike rates for a unit over time.
+    timestamps : array-like or None, default=None
+        An array of time points at which spike rates are measured. If None, the indices of `spike_rates` are used.
     group_labels : array-like or None, default=None
         An array specifying the group label for each unit. Must have the same length as `spike_rates`.
         If None, no grouping is used.
@@ -185,6 +187,9 @@ def plot_PSTH(
     """
 
     spike_rates = np.asarray(spike_rates)
+    if timestamps is None:
+        timestamps = np.arange(spike_rates.shape[1])
+    timestamps = np.asarray(timestamps)
 
     # Create a new figure if no Axes object is provided
     if ax is None:
@@ -253,13 +258,46 @@ def plot_PSTH(
     # Plot zero line
     ax.axvline(0, color="black", linestyle="--")
 
+    # Plot significance
+    if group_labels is not None and sig_test:
+        y_max = ax.get_ylim()[1]
+        pvals = np.array(
+            [anova_oneway(rate, group_labels).pvalue for rate in spike_rates.T]
+        )
+
+        sig_mask = pvals < 0.001
+        ax.plot(
+            timestamps[sig_mask],
+            [y_max] * np.sum(sig_mask),
+            ".",
+            color=(1, 0, 0),
+            zorder=100,
+        )
+
+        sig_mask = (0.001 <= pvals) & (pvals < 0.01)
+        ax.plot(
+            timestamps[sig_mask],
+            [y_max] * np.sum(sig_mask),
+            ".",
+            color=(1, 0.33, 0.33),
+            zorder=50,
+        )
+
+        sig_mask = (0.01 <= pvals) & (pvals < 0.05)
+        ax.plot(
+            timestamps[sig_mask],
+            [y_max] * np.sum(sig_mask),
+            ".",
+            color=(1, 0.67, 0.67),
+            zorder=0,
+        )
     return ax
 
 
 def plot_spikes_with_PSTH(
     spikes: list[npt.ArrayLike],
-    timestamps: npt.ArrayLike,
     spike_rates: npt.ArrayLike,
+    timestamps: npt.ArrayLike,
     *,
     group_labels: npt.ArrayLike | None = None,
     group_order: npt.ArrayLike | None = None,
@@ -267,6 +305,7 @@ def plot_spikes_with_PSTH(
     ascending: bool = False,
     plot_stats: bool = False,
     error_type: str | tuple[str, float] | None = ("ci", 95),
+    sig_test: bool = False,
     axes: tuple[plt.Axes, plt.Axes] | None = None,
 ) -> tuple[plt.Axes, plt.Axes]:
     """
@@ -280,10 +319,10 @@ def plot_spikes_with_PSTH(
     ----------
     spikes : list of array-like
         A list of arrays where each array contains spike times for a unit.
-    timestamps : array-like
-        An array of time points at which spike rates are measured.
     spike_rates : array-like
         A 2D array where each row contains the spike rates for a unit over time.
+    timestamps : array-like
+        An array of time points at which spike rates are measured.
     group_labels : array-like or None, default=None
         An array specifying the group label for each unit. Must have the same length as `spikes`.
         If None, no grouping is used.
@@ -315,9 +354,10 @@ def plot_spikes_with_PSTH(
         _, axes = plt.subplots(
             2,
             1,
+            figsize=(4, 6),
             height_ratios=[3, 1],
             sharex=True,
-            gridspec_kw={"hspace": 0.1},
+            gridspec_kw={"hspace": 0.05},
         )
     axes = np.ravel(axes)
 
@@ -334,17 +374,29 @@ def plot_spikes_with_PSTH(
 
     # Plot PSTH
     plot_PSTH(
-        timestamps,
         spike_rates,
+        timestamps,
         group_labels=group_labels,
         group_order=group_order,
         error_type=error_type,
+        sig_test=sig_test,
         ax=axes[1],
     )
 
     # Misc. settings
-    plt.xlim(timestamps[0], timestamps[-1])
+    axes[0].set_xlim(timestamps[0], timestamps[-1])
+    axes[0].get_xaxis().set_visible(False)
+    axes[0].set_ylabel("Trial" if stats is None else "Trial (sorted)")
+
     axes[1].get_legend().remove()
+    axes[1].set_xlabel("Time [s]")
+    axes[1].set_ylabel("Firing Rate [Hz]")
+
+    sns.despine(ax=axes[0])
+    sns.despine(ax=axes[1])
+    sns.move_legend(
+        axes[0], "upper left", bbox_to_anchor=(1, 1), title=None, frameon=False
+    )
 
     return axes
 
@@ -460,8 +512,7 @@ def plot_metrics(
         x_test_base = np.mean(np.arange(len(x_order)))
         y_test = y_max + 0.05 * (y_max - y_min)
         if y_group is None:
-            samples = [data[data[x_group] == x][metric].values for x in x_order]
-            p = f_oneway(*samples).pvalue
+            p = anova_oneway(data[metric], data[x_group]).pvalue
             if p < 0.05:
                 ax.text(
                     np.mean(np.arange(len(x_order))),
@@ -478,11 +529,8 @@ def plot_metrics(
             cmap = sns.color_palette("tab10", len(y_order))
             to_plot = []
             for i, y in enumerate(y_order):
-                samples = [
-                    data[(data[x_group] == x) & (data[y_group] == y)][metric].values
-                    for x in x_order
-                ]
-                p = f_oneway(*samples).pvalue
+                df = data[data[y_group] == y]
+                p = anova_oneway(df[metric], df[x_group]).pvalue
                 if p < 0.05 / len(np.unique(data[y_group])):
                     to_plot.append(cmap[i])
             x_tests = (
