@@ -5,7 +5,9 @@ import numpy.typing as npt
 
 
 def make_balanced_dichotomies(
-    conditions: npt.ArrayLike, compute_difficulties: bool = False
+    conditions: npt.ArrayLike,
+    compute_difficulties: bool = False,
+    return_one_sided: bool = False,
 ):
     conditions = np.asarray(conditions)
     dichotomies = []
@@ -15,6 +17,7 @@ def make_balanced_dichotomies(
         set1 = [first_ind, *set1]
         set2 = np.setdiff1d(cond_inds, set1)
         dichotomies.append((conditions[set1], conditions[set2]))
+    output = [d[0] for d in dichotomies] if return_one_sided else dichotomies
 
     if compute_difficulties:
         difficulties = []
@@ -24,5 +27,5 @@ def make_balanced_dichotomies(
         difficulties = np.array(difficulties)
         min_diff, max_diff = np.min(difficulties), np.max(difficulties)
         difficulties = (difficulties - min_diff) / (max_diff - min_diff)
-        return dichotomies, difficulties
-    return dichotomies
+        return output, difficulties
+    return output

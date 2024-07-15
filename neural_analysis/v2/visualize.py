@@ -4,7 +4,9 @@ import numpy.typing as npt
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.stats import sem
+from scipy.ndimage import gaussian_filter1d
 from statsmodels.stats.oneway import anova_oneway
+from statsmodels.discrete.discrete_model import Poisson
 
 from .statistics import compute_confidence_interval
 
@@ -103,14 +105,14 @@ def plot_spikes(
 
     # Plot without grouping
     if group_labels is None:
-        ax.eventplot(spikes, colors="black")
+        ax.eventplot(spikes, colors="black", linelengths=len(spikes) / 100)
         if plot_stats and stats is not None:
-            ax.plot(stats, np.arange(len(spikes)), color="black")
+            ax.plot(stats, np.arange(len(spikes)), color="black", lw=3)
 
     # Plot with grouping
     else:
         # order by group
-        group_inds = [np.nonzero(group_labels == grp)[0] for grp in group_order]
+        group_inds = [np.nonzero(group_labels == grp)[0] for grp in group_order[::-1]]
         group_lens = [len(ind) for ind in group_inds]
         group_inds = np.concatenate(group_inds)
         spikes = spikes[group_inds]
@@ -118,15 +120,15 @@ def plot_spikes(
             stats = stats[group_inds]
 
         # Define colors and legend handles
-        cmap = sns.color_palette("tab10", len(group_order))
+        cmap = sns.color_palette("tab10", len(group_order))[::-1]
         colors = np.concatenate(
             [[cmap[i]] * grp_len for i, grp_len in enumerate(group_lens)]
         )
-        handles = [plt.Line2D([0], [0], color=c) for c in cmap]
+        handles = [plt.Line2D([0], [0], color=c, lw=3) for c in cmap]
 
         # Plots
-        ax.eventplot(spikes, colors=colors)
-        ax.legend(handles, group_order)
+        ax.eventplot(spikes, colors=colors, linelengths=len(spikes) / 100)
+        ax.legend(handles[::-1], group_order)
         if plot_stats and stats is not None:
             start_ind = 0
             for i, grp_len in enumerate(group_lens):
@@ -135,11 +137,15 @@ def plot_spikes(
                     stats[start_ind:end_ind],
                     np.arange(grp_len) + start_ind,
                     color=cmap[i],
+                    lw=3,
                 )
                 start_ind = end_ind
 
     # Plot zero line
     ax.axvline(0, color="black", linestyle="--")
+
+    # Misc. settings
+    ax.set_ylim(0, len(spikes))
 
     return ax
 
@@ -152,6 +158,7 @@ def plot_PSTH(
     group_order: npt.ArrayLike | None = None,
     error_type: str | tuple[str, float] | None = ("ci", 95),
     sig_test: bool = False,
+    smooth_width: float | None = None,
     ax: plt.Axes | None = None,
 ) -> plt.Axes:
     """
@@ -190,6 +197,8 @@ def plot_PSTH(
     if timestamps is None:
         timestamps = np.arange(spike_rates.shape[1])
     timestamps = np.asarray(timestamps)
+    if smooth_width is not None:
+        smooth_width /= timestamps[1] - timestamps[0]
 
     # Create a new figure if no Axes object is provided
     if ax is None:
@@ -225,9 +234,13 @@ def plot_PSTH(
     # Plot without grouping
     if group_labels is None:
         mean_rates = np.mean(spike_rates, axis=0)
+        if smooth_width is not None:
+            mean_rates = gaussian_filter1d(mean_rates, sigma=smooth_width)
         ax.plot(timestamps, mean_rates)
         if error_type is not None:
             error_rates = error_func(spike_rates)
+            if smooth_width is not None:
+                error_rates = gaussian_filter1d(error_rates, sigma=smooth_width)
             ax.fill_between(
                 timestamps,
                 mean_rates - error_rates,
@@ -244,9 +257,13 @@ def plot_PSTH(
         for grp, grp_ind in zip(group_order, group_inds):
             grp_rates = spike_rates[grp_ind]
             mean_rates = np.mean(grp_rates, axis=0)
+            if smooth_width is not None:
+                mean_rates = gaussian_filter1d(mean_rates, sigma=smooth_width)
             ax.plot(timestamps, mean_rates, label=grp)
             if error_type is not None:
                 error_rates = error_func(grp_rates)
+                if smooth_width is not None:
+                    error_rates = gaussian_filter1d(error_rates, sigma=smooth_width)
                 ax.fill_between(
                     timestamps,
                     mean_rates - error_rates,
@@ -261,8 +278,9 @@ def plot_PSTH(
     # Plot significance
     if group_labels is not None and sig_test:
         y_max = ax.get_ylim()[1]
+        spike_rates = np.sqrt(spike_rates).T
         pvals = np.array(
-            [anova_oneway(rate, group_labels).pvalue for rate in spike_rates.T]
+            [anova_oneway(rate, group_labels).pvalue for rate in spike_rates]
         )
 
         sig_mask = pvals < 0.001
@@ -306,6 +324,7 @@ def plot_spikes_with_PSTH(
     plot_stats: bool = False,
     error_type: str | tuple[str, float] | None = ("ci", 95),
     sig_test: bool = False,
+    smooth_width: float | None = None,
     axes: tuple[plt.Axes, plt.Axes] | None = None,
 ) -> tuple[plt.Axes, plt.Axes]:
     """
@@ -380,6 +399,7 @@ def plot_spikes_with_PSTH(
         group_order=group_order,
         error_type=error_type,
         sig_test=sig_test,
+        smooth_width=smooth_width,
         ax=axes[1],
     )
 
@@ -388,6 +408,7 @@ def plot_spikes_with_PSTH(
     axes[0].get_xaxis().set_visible(False)
     axes[0].set_ylabel("Trial" if stats is None else "Trial (sorted)")
 
+    axes[1].set_xlim(timestamps[0], timestamps[-1])
     axes[1].get_legend().remove()
     axes[1].set_xlabel("Time [s]")
     axes[1].set_ylabel("Firing Rate [Hz]")
@@ -512,7 +533,7 @@ def plot_metrics(
         x_test_base = np.mean(np.arange(len(x_order)))
         y_test = y_max + 0.05 * (y_max - y_min)
         if y_group is None:
-            p = anova_oneway(data[metric], data[x_group]).pvalue
+            p = anova_oneway(np.sqrt(data[metric]), data[x_group]).pvalue
             if p < 0.05:
                 ax.text(
                     np.mean(np.arange(len(x_order))),
@@ -530,7 +551,7 @@ def plot_metrics(
             to_plot = []
             for i, y in enumerate(y_order):
                 df = data[data[y_group] == y]
-                p = anova_oneway(df[metric], df[x_group]).pvalue
+                p = anova_oneway(np.sqrt(df[metric]), df[x_group]).pvalue
                 if p < 0.05 / len(np.unique(data[y_group])):
                     to_plot.append(cmap[i])
             x_tests = (

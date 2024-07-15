@@ -190,7 +190,7 @@ class LeaveNCrossingsOut(GroupsConsumerMixin, BaseCrossValidator):
     def __init__(self, n_crossings: int = 1):
         self.n_crossings = n_crossings
 
-    def _iter_test_indices(self, X, y=None, groups=None):
+    def get_group_indices(self, X, y, groups):
         left_grp_inds = defaultdict(list)
         right_grp_inds = defaultdict(list)
         for i, (grp, yi) in enumerate(zip(groups, y)):
@@ -199,12 +199,15 @@ class LeaveNCrossingsOut(GroupsConsumerMixin, BaseCrossValidator):
                 left_grp_inds[grp].append(i)
             else:
                 right_grp_inds[grp].append(i)
+        return left_grp_inds, right_grp_inds
 
+    def _iter_test_indices(self, X, y, groups):
+        left_grp_inds, right_grp_inds = self.get_group_indices(X, y, groups)
         for left_inds in left_grp_inds.values():
             for right_inds in right_grp_inds.values():
                 yield np.concatenate([left_inds, right_inds])
 
-    def get_n_splits(self, X=None, y=None, groups=None):
+    def get_n_splits(self, X, y, groups):
         """
         Returns the number of splitting iterations in the cross-validator.
 

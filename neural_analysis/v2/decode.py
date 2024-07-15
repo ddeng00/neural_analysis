@@ -1,14 +1,16 @@
-from collections import defaultdict
-from itertools import combinations, permutations
+from itertools import combinations, permutations, product
 
 import numpy as np
 import numpy.typing as npt
 from sklearn.base import ClassifierMixin
-from sklearn.svm import SVC
+from sklearn.svm import LinearSVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import cross_validate, cross_val_score
 from scipy.spatial.distance import cosine
+from sklearn.base import clone
+
+from joblib import Parallel, delayed
 
 from .validate import (
     MultiStratifiedKFold,
@@ -21,12 +23,12 @@ def balanced_decoding(
     x: npt.ArrayLike,
     y: npt.ArrayLike,
     *,
-    conditions: npt.ArrayLike | None = None,
-    clf: ClassifierMixin = SVC,
+    condition: npt.ArrayLike | None = None,
+    clf: ClassifierMixin = LinearSVC,
     n_splits: int = 5,
     n_repeats: int = 1,
     shuffle: bool = False,
-    clf_kwargs: dict | None = {"kernel": "linear"},
+    clf_kwargs: dict | None = None,
     return_weights: bool = False,
     n_jobs: int | None = None,
     random_state: int | np.random.RandomState | None = None,
@@ -86,7 +88,7 @@ def balanced_decoding(
         clf,
         x,
         y,
-        groups=conditions,
+        groups=condition,
         cv=cv,
         n_jobs=n_jobs,
         return_estimator=return_weights,
@@ -104,9 +106,10 @@ def pairwise_generalization(
     xs: list[npt.ArrayLike],
     ys: list[npt.ArrayLike],
     *,
-    clf: ClassifierMixin = SVC,
-    clf_kwargs: dict | None = {"kernel": "linear"},
+    clf: ClassifierMixin = LinearSVC,
+    clf_kwargs: dict | None = None,
     skip_diagonal: bool = False,
+    n_jobs: int | None = None,
 ) -> np.ndarray:
     """
     Compute generalization accuracy across multiple datasets.
@@ -123,6 +126,8 @@ def pairwise_generalization(
         Additional arguments to pass to the classifier.
     skip_diagonal : bool, default=False
         If True, skip computation of the diagonal elements of the score matrix.
+    n_jobs : int or None, optional
+        Number of jobs to run in parallel. By convention, n_jobs=-1 means using all processors.
 
     Returns
     -------
@@ -131,27 +136,37 @@ def pairwise_generalization(
         training datasets and column indices correspond to the test datasets.
     """
 
-    clf = clf(**clf_kwargs) if clf_kwargs else clf()
-    clf = make_pipeline(StandardScaler(), clf)
+    # initialize score matrix and classifier
     n_samples = len(xs)
     score_matrix = np.zeros((n_samples, n_samples))
-    for i in range(n_samples):
-        clf = clf.fit(xs[i], ys[i])
+    clf = clf(**clf_kwargs) if clf_kwargs else clf()
+    clf = make_pipeline(StandardScaler(), clf)
+
+    # define worker function
+    def fit_and_score(i):
+        clf_i = clone(clf)
+        clf_i.fit(xs[i], ys[i])
         for j in range(n_samples):
             if skip_diagonal and i == j:
                 continue
-            score_matrix[i, j] = clf.score(xs[j], ys[j])
+            score_matrix[i, j] = clf_i.score(xs[j], ys[j])
+
+    # compute generalization scores
+    if n_jobs is None or n_jobs == 1:
+        [fit_and_score(i) for i in range(n_samples)]
+    else:
+        Parallel(n_jobs=n_jobs)(delayed(fit_and_score)(i) for i in range(n_samples))
     return score_matrix
 
 
-def between_crossings_generalization(
+def cross_generalization(
     x: npt.ArrayLike,
     y: npt.ArrayLike,
-    conditions: npt.ArrayLike,
+    condition: npt.ArrayLike,
     *,
-    clf: ClassifierMixin = SVC,
+    clf: ClassifierMixin = LinearSVC,
     n_crossings: int = 1,
-    clf_kwargs: dict | None = {"kernel": "linear"},
+    clf_kwargs: dict | None = None,
     n_jobs: int | None = None,
 ) -> np.ndarray:
     """
@@ -187,15 +202,63 @@ def between_crossings_generalization(
         clf,
         x,
         y,
-        groups=conditions,
+        groups=condition,
         cv=cv,
         n_jobs=n_jobs,
         error_score="raise",
     )
 
 
-def between_crossings_parallelism(
-    x: npt.ArrayLike, y: npt.ArrayLike, conditions: npt.ArrayLike
+def pairwise_cross_generalization(
+    xs: list[npt.ArrayLike],
+    ys: list[npt.ArrayLike],
+    conditions: list[npt.ArrayLike],
+    *,
+    clf: ClassifierMixin = LinearSVC,
+    n_crossings: int = 1,
+    clf_kwargs: dict | None = None,
+    skip_diagonal: bool = False,
+):
+    clf = clf(**clf_kwargs) if clf_kwargs else clf()
+    clf = make_pipeline(StandardScaler(), clf)
+
+    # Get the group indices for each dataset
+    left_inds, right_inds = None, None
+    for x, y, condition in zip(xs, ys, conditions):
+        cv = LeaveNCrossingsOut(n_crossings=n_crossings)
+        li, ri = cv.get_group_indices(x, y, condition)
+        if left_inds is None:
+            left_inds, right_inds = [li], [ri]
+            n_splits = cv.get_n_splits(None, None, condition)
+        else:
+            left_inds.append(li)
+            right_inds.append(ri)
+
+    # Compute the cross-generalization scores
+    n_samples = len(xs)
+    score_matrix = np.zeros((n_splits, n_samples, n_samples))
+
+    for i in range(n_samples):
+        l1, r1 = left_inds[i], right_inds[i]
+
+        for j, (k1, k2) in enumerate(zip(l1.keys(), r1.keys())):
+            train_inds = np.array(
+                [i for i in range(len(x)) if i not in l1[k1] + r1[k2]]
+            )
+            clf = clf.fit(xs[i][train_inds], ys[i][train_inds])
+
+            for k in range(n_samples):
+                if skip_diagonal and i == k:
+                    continue
+                l2, r2 = left_inds[k], right_inds[k]
+                test_inds = np.array(l2[k1] + r2[k2])
+                score_matrix[j, i, k] = clf.score(xs[k][test_inds], ys[k][test_inds])
+
+    return np.mean(score_matrix, axis=0)
+
+
+def cross_parallelism(
+    x: npt.ArrayLike, y: npt.ArrayLike, condition: npt.ArrayLike
 ) -> np.ndarray:
     """
     Compute the parallelism between group crossings.
@@ -215,14 +278,8 @@ def between_crossings_parallelism(
         Array of cosine similarities for the best coding direction.
     """
 
-    left_cond_inds = defaultdict(list)
-    right_cond_inds = defaultdict(list)
-    for i, (cond, yi) in enumerate(zip(conditions, y)):
-        cond = tuple(cond)
-        if yi == y[0]:
-            left_cond_inds[cond].append(i)
-        else:
-            right_cond_inds[cond].append(i)
+    cv = LeaveNCrossingsOut(n_crossings=1)
+    left_cond_inds, right_cond_inds = cv.get_group_indices(x, y, condition)
 
     left_xs = [np.mean(x[inds], axis=0) for inds in left_cond_inds.values()]
     right_xs = [np.mean(x[inds], axis=0) for inds in right_cond_inds.values()]

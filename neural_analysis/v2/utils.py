@@ -2,7 +2,7 @@ from pathlib import Path
 import re
 
 import numpy as np
-import numpy.typing as npt
+import pandas as pd
 from scipy.io import loadmat
 
 
@@ -171,61 +171,54 @@ def create_rolling_window(
     return np.array(starts), np.array(ends), np.array(centers)
 
 
-# def create_rolling_windows(
-#     starts: npt.ArrayLike,
-#     ends: npt.ArrayLike,
-#     window_size: float,
-#     step_size: float,
-#     *,
-#     exclude_oob: bool = False,
-# ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-#     """
-#     Generate rolling windows based on the given start and end times.
-
-#     Parameters
-#     ----------
-#     starts : array-like of shape (n_trials,)
-#         Array of start times for each trial.
-#     ends : array-like of shape (n_trials,)
-#         Array of end times for each trial.
-#     window_size : float
-#         Size of each rolling window.
-#     step_size : float
-#         Step size between consecutive windows.
-#     exclude_oob : bool, default=False
-#         If True, adjust windows to stay within the bounds of the trials.
-
-#     Returns
-#     -------
-#     tuple of `numpy.ndarray`
-#         A tuple containing:
-#         - Array of start times for each rolling window.
-#         - Array of end times for each rolling window.
-#         - Array of center times for each rolling window.
-#     """
-
-#     rolling_starts, rolling_ends, rolling_centers = [], [], []
-#     half_win_size = window_size / 2
-
-#     for start, end in zip(starts, ends):
-#         center = start
-#         w_starts, w_ends, w_times = [], [], []
-#         while center <= end:
-#             w_start = center - half_win_size
-#             w_end = center + half_win_size
-#             if exclude_oob:
-#                 w_start = max(w_start, start)
-#                 w_end = min(w_end, end)
-#             w_starts.append(w_start)
-#             w_ends.append(w_end)
-#             w_times.append(center)
-#             center += step_size
-#         rolling_starts.append(w_starts)
-#         rolling_ends.append(w_ends)
-#         rolling_centers.append(w_times)
-
-#     return rolling_starts, rolling_ends, rolling_centers
-
-
 def isin_2d(x1, x2):
+    """
+    Check if any of the rows in a 2D array `x1` are present in a 2D array `x2`.
+
+    Parameters:
+    -----------
+    x1 : numpy.ndarray
+        A 2D numpy array where each row is a vector to check for presence in `x2`.
+    x2 : numpy.ndarray
+        A 2D numpy array where each row is a vector to check against.
+
+    Returns:
+    --------
+    bool
+        True if any row in `x1` is present in `x2`, False otherwise.
+
+    Example:
+    --------
+    >>> import numpy as np
+    >>> x1 = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> x2 = np.array([[7, 8, 9], [1, 2, 3]])
+    >>> isin_2d(x1, x2)
+    True
+    """
+
     return (x1[:, None] == x2).all(-1).any(-1)
+
+
+def pvalue_to_decimal(pvalue: float, levels: list[float] = [0.05, 0.01, 0.001]) -> str:
+    """
+    Convert p-value to a string representation using asterisks.
+
+    Parameters
+    ----------
+    pvalue : float
+        The p-value to convert.
+    levels : list of float, default=[0.05, 0.01, 0.001]
+        The significance levels for conversion. The number of asterisks corresponds to the number of levels the p-value crosses.
+        For example, if levels are [0.05, 0.01, 0.001] and p-value is 0.007, it would return '**' because 0.007 < 0.05 and 0.007 < 0.01.
+
+    Returns
+    -------
+    str
+        A string of asterisks representing the significance level of the p-value.
+    """
+    levels = sorted(levels, reverse=True)
+    ret_val = "ns"
+    for i, level in enumerate(levels):
+        if pvalue <= level:
+            ret_val = "*" * (i + 1)
+    return ret_val
