@@ -1,4 +1,4 @@
-from itertools import combinations, permutations, product
+from itertools import combinations, permutations
 
 import numpy as np
 import numpy.typing as npt
@@ -6,39 +6,45 @@ from sklearn.base import ClassifierMixin
 from sklearn.svm import LinearSVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
-from sklearn.model_selection import cross_validate, cross_val_score
+from sklearn.model_selection import (
+    cross_validate,
+    cross_val_score,
+    StratifiedKFold,
+    RepeatedStratifiedKFold,
+)
 from scipy.spatial.distance import cosine
 from sklearn.base import clone
 
 from joblib import Parallel, delayed
 
-from .validate import (
+from ..validate import (
     MultiStratifiedKFold,
     RepeatedMultiStratifiedKFold,
     LeaveNCrossingsOut,
 )
 
 
-def balanced_decoding(
-    x: npt.ArrayLike,
+def compute_decodability(
+    X: npt.ArrayLike,
     y: npt.ArrayLike,
+    conditions: npt.ArrayLike | None = None,
     *,
-    condition: npt.ArrayLike | None = None,
     clf: ClassifierMixin = LinearSVC,
     n_splits: int = 5,
     n_repeats: int = 1,
     shuffle: bool = False,
     clf_kwargs: dict | None = None,
+    condition_balanced: bool = False,
     return_weights: bool = False,
     n_jobs: int | None = None,
     random_state: int | np.random.RandomState | None = None,
 ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """
-    Cross-validate balanced classification accuracy.
+    Compute decodability (i.e., classification accuracy) using cross-validation.
 
     Parameters
     ----------
-    x : array-like of shape (n_samples, n_features)
+    X : array-like of shape (n_samples, n_features)
         Training data.
     y : array-like of shape (n_samples,)
         Target labels.
@@ -51,9 +57,12 @@ def balanced_decoding(
     n_repeats : int, default=1
         Number of times cross-validation needs to be repeated.
     shuffle : bool, default=False
-        Whether to shuffle the data before splitting into batches.
+        Whether to shuffle the data before splitting into batches. Only relevant if `n_repeats` = 1.
     clf_kwargs : dict or None, default=None
         Additional arguments to pass to the classifier.
+    condition_balanced : bool, default=False
+        Whether the proportion of samples in each condition should be equal in each fold.
+        Ignored if `conditions` is None.
     return_weights : bool, default=False
         Whether to return the weights of the classifier.
     n_jobs : int or None, default=None
@@ -69,32 +78,35 @@ def balanced_decoding(
         Array of feature weights for each fold.
     """
 
+    # initialize classifier and cross-validator
     clf = clf(**clf_kwargs) if clf_kwargs else clf()
     clf = make_pipeline(StandardScaler(), clf)
-    if n_repeats > 1:
+    if condition_balanced and n_repeats == 1:
+        cv = MultiStratifiedKFold(n_splits=n_splits, random_state=random_state)
+    elif condition_balanced and n_repeats > 1:
         cv = RepeatedMultiStratifiedKFold(
-            n_splits=n_splits,
-            n_repeats=n_repeats,
-            random_state=random_state,
+            n_splits=n_splits, n_repeats=n_repeats, random_state=random_state
+        )
+    elif n_repeats == 1:
+        cv = StratifiedKFold(
+            n_splits=n_splits, shuffle=shuffle, random_state=random_state
         )
     else:
-        cv = MultiStratifiedKFold(
-            n_splits=n_splits,
-            shuffle=shuffle,
-            random_state=random_state,
+        cv = RepeatedStratifiedKFold(
+            n_splits=n_splits, n_repeats=n_repeats, random_state=random_state
         )
 
+    # perform cross-validation
     results = cross_validate(
         clf,
-        x,
+        X,
         y,
-        groups=condition,
+        groups=conditions,
         cv=cv,
         n_jobs=n_jobs,
         return_estimator=return_weights,
         error_score="raise",
     )
-
     if return_weights:
         weights = [est.coef_ for est in results["estimator"]]
         return np.asarray(results["test_score"]), np.asarray(weights)
@@ -102,8 +114,8 @@ def balanced_decoding(
         return np.asarray(results["test_score"])
 
 
-def pairwise_generalization(
-    xs: list[npt.ArrayLike],
+def compute_decodability_ct(
+    Xs: list[npt.ArrayLike],
     ys: list[npt.ArrayLike],
     *,
     clf: ClassifierMixin = LinearSVC,
@@ -112,11 +124,11 @@ def pairwise_generalization(
     n_jobs: int | None = None,
 ) -> np.ndarray:
     """
-    Compute generalization accuracy across multiple datasets.
+    Compute temporal generalization accuracy across multiple datasets.
 
     Parameters
     ----------
-    xs : list of array-like of shape (n_samples, n_features)
+    Xs : list of array-like of shape (n_samples, n_features)
         List of feature matrices.
     ys : list of array-like of shape (n_samples,)
         List of target vectors.
@@ -137,7 +149,7 @@ def pairwise_generalization(
     """
 
     # initialize score matrix and classifier
-    n_samples = len(xs)
+    n_samples = len(Xs)
     score_matrix = np.zeros((n_samples, n_samples))
     clf = clf(**clf_kwargs) if clf_kwargs else clf()
     clf = make_pipeline(StandardScaler(), clf)
@@ -145,11 +157,11 @@ def pairwise_generalization(
     # define worker function
     def fit_and_score(i):
         clf_i = clone(clf)
-        clf_i.fit(xs[i], ys[i])
+        clf_i.fit(Xs[i], ys[i])
         for j in range(n_samples):
             if skip_diagonal and i == j:
                 continue
-            score_matrix[i, j] = clf_i.score(xs[j], ys[j])
+            score_matrix[i, j] = clf_i.score(Xs[j], ys[j])
 
     # compute generalization scores
     if n_jobs is None or n_jobs == 1:
@@ -159,10 +171,10 @@ def pairwise_generalization(
     return score_matrix
 
 
-def cross_generalization(
-    x: npt.ArrayLike,
+def compute_ccgp(
+    X: npt.ArrayLike,
     y: npt.ArrayLike,
-    condition: npt.ArrayLike,
+    conditions: npt.ArrayLike,
     *,
     clf: ClassifierMixin = LinearSVC,
     n_crossings: int = 1,
@@ -170,11 +182,11 @@ def cross_generalization(
     n_jobs: int | None = None,
 ) -> np.ndarray:
     """
-    Perform cross-conditional generalization using Leave-N-Crossings-Out cross-validation.
+    Compute cross-conditional generalization performance (CCGP) using cross-validation across conditions.
 
     Parameters
     ----------
-    x : array-like of shape (n_samples, n_features)
+    X : array-like of shape (n_samples, n_features)
         Feature matrix.
     y : array-like of shape (n_samples,)
         Target vector.
@@ -200,17 +212,17 @@ def cross_generalization(
     cv = LeaveNCrossingsOut(n_crossings=n_crossings)
     return cross_val_score(
         clf,
-        x,
+        X,
         y,
-        groups=condition,
+        groups=conditions,
         cv=cv,
         n_jobs=n_jobs,
         error_score="raise",
     )
 
 
-def pairwise_cross_generalization(
-    xs: list[npt.ArrayLike],
+def compute_ccgp_ct(
+    Xs: list[npt.ArrayLike],
     ys: list[npt.ArrayLike],
     conditions: list[npt.ArrayLike],
     *,
@@ -224,9 +236,9 @@ def pairwise_cross_generalization(
 
     # Get the group indices for each dataset
     left_inds, right_inds = None, None
-    for x, y, condition in zip(xs, ys, conditions):
+    for X, y, condition in zip(Xs, ys, conditions):
         cv = LeaveNCrossingsOut(n_crossings=n_crossings)
-        li, ri = cv.get_group_indices(x, y, condition)
+        li, ri = cv.get_group_indices(X, y, condition)
         if left_inds is None:
             left_inds, right_inds = [li], [ri]
             n_splits = cv.get_n_splits(None, None, condition)
@@ -235,7 +247,7 @@ def pairwise_cross_generalization(
             right_inds.append(ri)
 
     # Compute the cross-generalization scores
-    n_samples = len(xs)
+    n_samples = len(Xs)
     score_matrix = np.zeros((n_splits, n_samples, n_samples))
 
     for i in range(n_samples):
@@ -243,29 +255,29 @@ def pairwise_cross_generalization(
 
         for j, (k1, k2) in enumerate(zip(l1.keys(), r1.keys())):
             train_inds = np.array(
-                [i for i in range(len(x)) if i not in l1[k1] + r1[k2]]
+                [i for i in range(len(X)) if i not in l1[k1] + r1[k2]]
             )
-            clf = clf.fit(xs[i][train_inds], ys[i][train_inds])
+            clf = clf.fit(Xs[i][train_inds], ys[i][train_inds])
 
             for k in range(n_samples):
                 if skip_diagonal and i == k:
                     continue
                 l2, r2 = left_inds[k], right_inds[k]
                 test_inds = np.array(l2[k1] + r2[k2])
-                score_matrix[j, i, k] = clf.score(xs[k][test_inds], ys[k][test_inds])
+                score_matrix[j, i, k] = clf.score(Xs[k][test_inds], ys[k][test_inds])
 
     return np.mean(score_matrix, axis=0)
 
 
-def cross_parallelism(
-    x: npt.ArrayLike, y: npt.ArrayLike, condition: npt.ArrayLike
+def compute_ps(
+    X: npt.ArrayLike, y: npt.ArrayLike, conditions: npt.ArrayLike
 ) -> np.ndarray:
     """
-    Compute the parallelism between group crossings.
+    Compute the parallelism score among conditional vectors.
 
     Parameters
     ----------
-    x : array-like of shape (n_samples, n_features)
+    X : array-like of shape (n_samples, n_features)
         Feature matrix.
     y : array-like of shape (n_samples,)
         Target vector.
@@ -278,17 +290,17 @@ def cross_parallelism(
         Array of cosine similarities for the best coding direction.
     """
 
-    cv = LeaveNCrossingsOut(n_crossings=1)
-    left_cond_inds, right_cond_inds = cv.get_group_indices(x, y, condition)
+    cv = LeaveNCrossingsOut()
+    left_inds, right_inds = cv.get_group_indices(X, y, conditions)
 
-    left_xs = [np.mean(x[inds], axis=0) for inds in left_cond_inds.values()]
-    right_xs = [np.mean(x[inds], axis=0) for inds in right_cond_inds.values()]
-    left_xs, right_xs = np.asarray(left_xs), np.asarray(right_xs)
+    X_left = [np.mean(X[inds], axis=0) for inds in left_inds.values()]
+    X_right = [np.mean(X[inds], axis=0) for inds in right_inds.values()]
+    X_left, X_right = np.asarray(X_left), np.asarray(X_right)
 
     best_score = -np.inf
     best_similarities = None
-    for right_xs_perm in permutations(right_xs):
-        vecs = np.array(right_xs_perm) - left_xs
+    for right_xs_perm in permutations(X_right):
+        vecs = np.array(right_xs_perm) - X_left
         curr_sims = [1 - cosine(v1, v2) for v1, v2 in combinations(vecs, 2)]
         curr_score = np.mean(curr_sims)
         if curr_score > best_score:

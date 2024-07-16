@@ -8,9 +8,6 @@ from sklearn.model_selection._split import (
     StratifiedKFold,
     _RepeatedSplits,
 )
-from sklearn.utils import check_random_state
-
-from .utils import isin_2d
 
 
 class MultiStratifiedKFold(GroupsConsumerMixin, StratifiedKFold):
@@ -94,84 +91,6 @@ class RepeatedMultiStratifiedKFold(_RepeatedSplits):
             random_state=random_state,
             n_splits=n_splits,
         )
-
-
-def shuffle_data(
-    x: npt.ArrayLike,
-    y: npt.ArrayLike,
-    groups: npt.ArrayLike,
-    random_state: int | np.random.RandomState | None = None,
-):
-    rng = check_random_state(random_state)
-    x = np.copy(x)
-    for group in np.unique(groups, axis=0):
-        group_mask = isin_2d(groups, group)
-        x[group_mask] = x[group_mask][:, rng.permutation(x.shape[1])]
-    return x, y, groups
-
-
-def shuffle_class_labels(
-    x: npt.ArrayLike,
-    y: npt.ArrayLike,
-    groups: npt.ArrayLike | None = None,
-    *,
-    precomputed_group_masks: list[npt.ArrayLike] | None = None,
-    random_state: int | np.random.RandomState | None = None,
-) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Shuffle class labels.
-
-    This function shuffles the class labels while keeping the data and group labels intact.
-    Specifically, if group labels are provided, shuffling is done within each group.
-
-    Parameters
-    ----------
-    x : array-like of shape (n_samples, n_features)
-        Training data.
-    y : array-like of shape (n_samples,)
-        The target variable for supervised learning problems.
-    groups : array-like of shape (n_samples, n_conditions) or None, default=None
-        Group/condition labels. If provided, shuffling is done within each group.
-    precomputed_group_masks : list of array-like or None, default=None
-        Precomputed boolean masks for each group to speed up shuffling.
-    random_state : int or `numpy.random.RandomState` or None, default=None
-        Random state for reproducibility.
-
-    Returns
-    -------
-    x : ndarray
-        Original training data.
-    y_shuffled : ndarray
-        Shuffled target variable.
-    groups : ndarray, optional
-        Original group labels.
-    """
-
-    rng = check_random_state(random_state)
-    x, y = np.asarray(x), np.asarray(y)
-    if groups is not None:
-        groups = np.asarray(groups)
-
-    y_shuffled = y.copy()
-
-    if groups is None:
-        rng.shuffle(y_shuffled)
-        return x, y_shuffled
-    else:
-        if precomputed_group_masks is not None:
-            for group_mask in precomputed_group_masks:
-                y_group = y_shuffled[group_mask]
-                rng.shuffle(y_group)
-                y_shuffled[group_mask] = y_group
-        else:
-            unique_groups = np.unique(groups)
-            for group in unique_groups:
-                group_mask = isin_2d(groups, group)
-                y_group = y_shuffled[group_mask]
-                rng.shuffle(y_group)
-                y_shuffled[group_mask] = y_group
-
-        return x, y_shuffled, groups
 
 
 class LeaveNCrossingsOut(GroupsConsumerMixin, BaseCrossValidator):

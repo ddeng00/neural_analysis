@@ -48,7 +48,6 @@ def get_spikes(
     for start, end, alignment in zip(starts, ends, alignments):
         start = np.searchsorted(spikes, start, side="left")
         end = np.searchsorted(spikes, end, side="right")
-        # spikes = spikes[start:]  # truncate to exclude spikes already processed
         spikes_in_windows.append(spikes[start:end] - alignment)
 
     return spikes_in_windows
@@ -94,7 +93,6 @@ def count_spikes(
     for start, end in zip(starts, ends):
         start = np.searchsorted(spikes, start, side="left")
         end = np.searchsorted(spikes, end, side="right")
-        # spikes = spikes[start:]  # truncate to exclude spikes already processed
         counts_in_windows.append(end - start)
 
     return counts_in_windows

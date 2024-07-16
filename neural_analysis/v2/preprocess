@@ -3,9 +3,9 @@ import numpy.typing as npt
 import pandas as pd
 
 
-def inverse_normalization(arr: npt.ArrayLike, negate: bool = True) -> np.ndarray:
+def inv_norm(arr: npt.ArrayLike, negate: bool = True) -> np.ndarray:
     """
-    Inverse normalization of an array.
+    Inverse normalize an array.
 
     Parameters
     ----------

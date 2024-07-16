@@ -4,14 +4,13 @@ import numpy as np
 import pandas as pd
 
 
-def n_way_anova(
+def perform_anova(
     data: pd.DataFrame,
     target: str,
     factors: list[str],
     *,
     target_transform: Callable | None = np.sqrt,
     include_interactions: bool = True,
-    return_effect_sizes: bool = False,
 ) -> pd.Series:
     """
     Perform a n-way ANOVA on the data. The data should be in long format.
@@ -49,3 +48,7 @@ def n_way_anova(
     model = ols(formula, data).fit()
     anova_table = anova_lm(model, typ=3 if include_interactions else 2)
     return anova_table["PR(>F)"].iloc[1:-1]
+
+
+def estimate_latency():
+    pass
