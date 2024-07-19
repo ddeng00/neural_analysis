@@ -2,6 +2,8 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
+from statsmodels.formula.api import ols
+from statsmodels.stats.anova import anova_lm
 
 
 def perform_anova(
@@ -27,15 +29,14 @@ def perform_anova(
         The transformation to apply to the target variable.
     include_interactions : bool, default=True
         Whether to include interactions, by default True.
+    include_f_statistic : bool, default=True
+        Whether to include the F-statistic, by default True.
 
     Returns
     -------
-    pd.Series
-        The p-values of the factors. If applicable, interaction terms are delimited by `:`.
+    anova_table : pd.DataFrame
+        The ANOVA table.
     """
-
-    from statsmodels.formula.api import ols
-    from statsmodels.stats.anova import anova_lm
 
     data = data[[target] + factors].copy()
     if target_transform is not None:
@@ -47,7 +48,12 @@ def perform_anova(
         formula = f"{target} ~ {' + '.join(factors)}"
     model = ols(formula, data).fit()
     anova_table = anova_lm(model, typ=3 if include_interactions else 2)
-    return anova_table["PR(>F)"].iloc[1:-1]
+    anova_table = anova_table.iloc[1:-1][["F", "PR(>F)"]]
+    anova_table.reset_index(inplace=True)
+    anova_table["index"] = anova_table["index"].apply(lambda x: x.split(":"))
+    anova_table.columns = ["factor", "F", "p"]
+    return anova_table
+
 
 # def poisson_overdispersion_test(results: PoissonResults, alpha: float = 0.05) -> bool:
 #     """

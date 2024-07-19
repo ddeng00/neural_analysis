@@ -1,3 +1,4 @@
+from warnings import warn
 from itertools import combinations, permutations
 
 import numpy as np
@@ -27,14 +28,13 @@ from ..validate import (
 def compute_decodability(
     X: npt.ArrayLike,
     y: npt.ArrayLike,
-    conditions: npt.ArrayLike | None = None,
+    condition: npt.ArrayLike | None = None,
     *,
     clf: ClassifierMixin = LinearSVC,
     n_splits: int = 5,
     n_repeats: int = 1,
     shuffle: bool = False,
     clf_kwargs: dict | None = None,
-    condition_balanced: bool = False,
     return_weights: bool = False,
     n_jobs: int | None = None,
     random_state: int | np.random.RandomState | None = None,
@@ -48,7 +48,7 @@ def compute_decodability(
         Training data.
     y : array-like of shape (n_samples,)
         Target labels.
-    conditions : array-like of shape (n_samples, n_conditions) or None, default=None
+    condition : array-like of shape (n_samples, n_conditions) or None, default=None
         Group labels for the samples used while splitting the dataset into train/test set.
     clf : `sklearn.base.ClassifierMixin`, default=`sklearn.svm.SVC`
         Classifier to use.
@@ -60,11 +60,8 @@ def compute_decodability(
         Whether to shuffle the data before splitting into batches. Only relevant if `n_repeats` = 1.
     clf_kwargs : dict or None, default=None
         Additional arguments to pass to the classifier.
-    condition_balanced : bool, default=False
-        Whether the proportion of samples in each condition should be equal in each fold.
-        Ignored if `conditions` is None.
     return_weights : bool, default=False
-        Whether to return the weights of the classifier.
+        Whether to return the weights of the classifier. If True, the classifier must have a `coef_` attribute.
     n_jobs : int or None, default=None
         Number of jobs to run in parallel.
     random_state : int, RandomState instance or None, default=None
@@ -78,53 +75,67 @@ def compute_decodability(
         Array of feature weights for each fold.
     """
 
-    # initialize classifier and cross-validator
+    # initialize classifier
     clf = clf(**clf_kwargs) if clf_kwargs else clf()
     clf = make_pipeline(StandardScaler(), clf)
-    if condition_balanced and n_repeats == 1:
-        cv = MultiStratifiedKFold(n_splits=n_splits, random_state=random_state)
-    elif condition_balanced and n_repeats > 1:
-        cv = RepeatedMultiStratifiedKFold(
-            n_splits=n_splits, n_repeats=n_repeats, random_state=random_state
-        )
-    elif n_repeats == 1:
-        cv = StratifiedKFold(
-            n_splits=n_splits, shuffle=shuffle, random_state=random_state
-        )
+
+    # determine which cross-validation strategy to use
+    if condition is None:
+        if n_splits == 1:
+            cv = StratifiedKFold(
+                n_splits=n_splits, shuffle=shuffle, random_state=random_state
+            )
+        else:
+            cv = RepeatedStratifiedKFold(
+                n_splits=n_splits, n_repeats=n_repeats, random_state=random_state
+            )
     else:
-        cv = RepeatedStratifiedKFold(
-            n_splits=n_splits, n_repeats=n_repeats, random_state=random_state
-        )
+        if n_splits == 1:
+            cv = MultiStratifiedKFold(
+                n_splits=n_splits, shuffle=shuffle, random_state=random_state
+            )
+        else:
+            cv = RepeatedMultiStratifiedKFold(
+                n_splits=n_splits, n_repeats=n_repeats, random_state=random_state
+            )
 
     # perform cross-validation
     results = cross_validate(
         clf,
         X,
         y,
-        groups=conditions,
+        groups=condition,
         cv=cv,
         n_jobs=n_jobs,
         return_estimator=return_weights,
         error_score="raise",
     )
     if return_weights:
-        weights = [est.coef_ for est in results["estimator"]]
-        return np.asarray(results["test_score"]), np.asarray(weights)
+        try:
+            weights = [est.coef_ for est in results["estimator"]]
+            return np.asarray(results["test_score"]), np.asarray(weights)
+        except AttributeError:
+            warn("Weights are not available for the given classifier.", UserWarning)
+            return np.asarray(results["test_score"]), None
     else:
         return np.asarray(results["test_score"])
 
 
-def compute_decodability_ct(
+def compute_decodability_ct_ind(
     Xs: list[npt.ArrayLike],
     ys: list[npt.ArrayLike],
+    conditions: list[npt.ArrayLike],
     *,
     clf: ClassifierMixin = LinearSVC,
+    n_splits: int = 5,
+    n_repeats: int = 1,
+    shuffle: bool = False,
     clf_kwargs: dict | None = None,
     skip_diagonal: bool = False,
     n_jobs: int | None = None,
 ) -> np.ndarray:
     """
-    Compute temporal generalization accuracy across multiple datasets.
+    Compute temporal generalization accuracy across multiple independent datasets.
 
     Parameters
     ----------
@@ -150,7 +161,7 @@ def compute_decodability_ct(
 
     # initialize score matrix and classifier
     n_samples = len(Xs)
-    score_matrix = np.zeros((n_samples, n_samples))
+    score_matrix = np.full((n_samples, n_samples), fill_value=np.nan)
     clf = clf(**clf_kwargs) if clf_kwargs else clf()
     clf = make_pipeline(StandardScaler(), clf)
 
@@ -159,9 +170,82 @@ def compute_decodability_ct(
         clf_i = clone(clf)
         clf_i.fit(Xs[i], ys[i])
         for j in range(n_samples):
-            if skip_diagonal and i == j:
-                continue
-            score_matrix[i, j] = clf_i.score(Xs[j], ys[j])
+            if i == j:
+                if skip_diagonal:
+                    continue
+                score_matrix[i, j] = compute_decodability(
+                    Xs[i],
+                    ys[i],
+                    conditions[i],
+                    clf=lambda _: clone(clf_i),
+                    n_splits=n_splits,
+                    n_repeats=n_repeats,
+                    shuffle=shuffle,
+                ).mean()
+            else:
+                score_matrix[i, j] = clf_i.score(Xs[j], ys[j])
+
+            # if skip_diagonal and i == j:
+            #     continue
+            # score_matrix[i, j] = clf_i.score(Xs[j], ys[j])
+
+    # compute generalization scores
+    if n_jobs is None or n_jobs == 1:
+        [fit_and_score(i) for i in range(n_samples)]
+    else:
+        Parallel(n_jobs=n_jobs)(delayed(fit_and_score)(i) for i in range(n_samples))
+    return score_matrix
+
+
+def compute_decodability_ct_rel(
+    Xs: list[npt.ArrayLike],
+    y: npt.ArrayLike,
+    condition: npt.ArrayLike | None = None,
+    *,
+    clf: ClassifierMixin = LinearSVC,
+    n_splits: int = 5,
+    n_repeats: int = 1,
+    shuffle: bool = False,
+    clf_kwargs: dict | None = None,
+    skip_diagonal: bool = False,
+    n_jobs: int | None = None,
+) -> np.ndarray:
+
+    # initialize score matrix and classifier
+    n_samples = len(Xs)
+    score_matrix = np.zeros((n_samples, n_samples))
+    clf = clf(**clf_kwargs) if clf_kwargs else clf()
+    clf = make_pipeline(StandardScaler(), clf)
+
+    # determine which cross-validation strategy to use
+    if condition is None:
+        if n_splits == 1:
+            cv = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=None)
+        else:
+            cv = RepeatedStratifiedKFold(
+                n_splits=n_splits, n_repeats=n_repeats, random_state=None
+            )
+    else:
+        if n_splits == 1:
+            cv = MultiStratifiedKFold(
+                n_splits=n_splits, shuffle=shuffle, random_state=None
+            )
+        else:
+            cv = RepeatedMultiStratifiedKFold(
+                n_splits=n_splits, n_repeats=n_repeats, random_state=None
+            )
+
+    # define worker function
+    def fit_and_score(i):
+        clf_i = clone(clf)
+        for train_inds, test_inds in cv.split(Xs[i], y, condition):
+            X_train, y_train = Xs[i][train_inds], y[train_inds]
+            clf_i.fit(X_train, y_train)
+            for j in range(n_samples):
+                if skip_diagonal and i == j:
+                    score_matrix[i, j] = np.nan
+                X_test, y_test = Xs[j][test_inds], y[test_inds]
+                score_matrix[i, j] += clf_i.score(X_test, y_test) / n_splits
 
     # compute generalization scores
     if n_jobs is None or n_jobs == 1:
@@ -174,7 +258,7 @@ def compute_decodability_ct(
 def compute_ccgp(
     X: npt.ArrayLike,
     y: npt.ArrayLike,
-    conditions: npt.ArrayLike,
+    condition: npt.ArrayLike,
     *,
     clf: ClassifierMixin = LinearSVC,
     n_crossings: int = 1,
@@ -190,7 +274,7 @@ def compute_ccgp(
         Feature matrix.
     y : array-like of shape (n_samples,)
         Target vector.
-    conditions : array-like of shape (n_samples,)
+    condition : array-like of shape (n_samples,)
         Group labels for the samples used while splitting the dataset into train/test set.
     clf : ClassifierMixin, default=SVC
         Classifier to use.
@@ -214,7 +298,7 @@ def compute_ccgp(
         clf,
         X,
         y,
-        groups=conditions,
+        groups=condition,
         cv=cv,
         n_jobs=n_jobs,
         error_score="raise",

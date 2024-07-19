@@ -409,15 +409,19 @@ def plot_spikes_with_PSTH(
     axes[0].set_ylabel("Trial" if stats is None else "Trial (sorted)")
 
     axes[1].set_xlim(timestamps[0], timestamps[-1])
-    axes[1].get_legend().remove()
+    try:
+        axes[1].get_legend().remove()
+    except AttributeError:
+        pass
     axes[1].set_xlabel("Time [s]")
     axes[1].set_ylabel("Firing Rate [Hz]")
 
     sns.despine(ax=axes[0])
     sns.despine(ax=axes[1])
-    sns.move_legend(
-        axes[0], "upper left", bbox_to_anchor=(1, 1), title=None, frameon=False
-    )
+    if axes[0].get_legend() is not None:
+        sns.move_legend(
+            axes[0], "upper left", bbox_to_anchor=(1, 1), title=None, frameon=False
+        )
 
     return axes
 
@@ -434,7 +438,7 @@ def plot_metrics(
     y_emph: npt.ArrayLike | None = None,
     sig_test: bool = False,
     marker: str = "o",
-    chance: float = 0.5,
+    chance: float | None = 0.5,
     ax: plt.Axes | None = None,
 ):
 
@@ -512,6 +516,7 @@ def plot_metrics(
     if null is not None:
         old_xlim = ax.get_xlim()
         null = null.groupby(x_group)[metric].quantile([0.05, 0.95]).unstack()
+        labeled = False
         for grp, (low, high) in null.iterrows():
             grp = list(x_order).index(grp)
             ax.fill_between(
@@ -521,12 +526,15 @@ def plot_metrics(
                 color="black",
                 alpha=0.25,
                 zorder=0,
+                label=None if labeled else "Perm. Null\n(5-95th pctl.)",
             )
+            labeled = True
             y_min, y_max = min(y_min, low), max(y_max, high)
         ax.set_xlim(old_xlim)
 
     # Plot chance level
-    ax.axhline(chance, color="red", linestyle="--", zorder=0, label="Chance")
+    if chance is not None:
+        ax.axhline(chance, color="red", linestyle="--", zorder=0, label="Chance")
 
     # Plot significance test results
     if x_group is not None and sig_test:

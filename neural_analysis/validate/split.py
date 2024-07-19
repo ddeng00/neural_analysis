@@ -1,3 +1,4 @@
+from warnings import warn
 from collections import defaultdict
 
 import numpy as np
@@ -108,6 +109,13 @@ class LeaveNCrossingsOut(GroupsConsumerMixin, BaseCrossValidator):
 
     def __init__(self, n_crossings: int = 1):
         self.n_crossings = n_crossings
+        if n_crossings > 1:
+            warn(
+                "LeaveNCrossingsOut is currently implemented only for n_crossings=1. "
+                "Setting n_crossings=1.",
+                UserWarning,
+            )
+            self.n_crossings = 1
 
     def get_group_indices(self, X, y, groups):
         left_grp_inds = defaultdict(list)
