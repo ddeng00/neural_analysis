@@ -6,9 +6,10 @@ import numpy.typing as npt
 
 def make_balanced_dichotomies(
     conditions: npt.ArrayLike,
-    compute_difficulties: bool = False,
+    condition_names: list[str] | None = None,
     return_one_sided: bool = False,
 ):
+    # generate dichotomies
     conditions = np.asarray(conditions)
     dichotomies = []
     cond_inds = np.arange(len(conditions))
@@ -17,15 +18,33 @@ def make_balanced_dichotomies(
         set1 = [first_ind, *set1]
         set2 = np.setdiff1d(cond_inds, set1)
         dichotomies.append((conditions[set1], conditions[set2]))
-    output = [d[0] for d in dichotomies] if return_one_sided else dichotomies
+    one_sided = [d[0] for d in dichotomies]
+    # results.append(one_sided if return_one_sided else dichotomies)
 
-    if compute_difficulties:
-        difficulties = []
-        for set1, set2 in dichotomies:
-            is_adjacent = [sum(c1 != c2) == 1 for c1, c2 in product(set1, set2)]
-            difficulties.append(np.sum(is_adjacent))
-        difficulties = np.array(difficulties)
-        min_diff, max_diff = np.min(difficulties), np.max(difficulties)
-        difficulties = (difficulties - min_diff) / (max_diff - min_diff)
-        return output, difficulties
-    return output
+    # compute number of adjacencies
+    difficulties = []
+    for set1, set2 in dichotomies:
+        is_adjacent = [sum(c1 != c2) == 1 for c1, c2 in product(set1, set2)]
+        difficulties.append(np.sum(is_adjacent))
+    difficulties = np.array(difficulties)
+    min_diff, max_diff = np.min(difficulties), np.max(difficulties)
+    difficulties = (difficulties - min_diff) / (max_diff - min_diff)
+
+    # name dichotomies
+    if condition_names is None:
+        dich_names = [f"unnamed_{i}" for i in range(len(conditions))]
+    else:
+        dich_names, seq_ind = [], 0
+        for split, diff in zip(one_sided, difficulties):
+            if diff == 1:
+                dich_names.append("XOR")
+            elif diff == 0:
+                for i, cond in enumerate(conditions):
+                    if all(split[:, i] == split[0:i]):
+                        dich_names.append(cond)
+                        break
+            else:
+                dich_names.append(f"unnamed_{seq_ind}")
+                seq_ind += 1
+
+    return one_sided if return_one_sided else dichotomies, dich_names, difficulties

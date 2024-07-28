@@ -120,12 +120,12 @@ def construct_pseudopopulation(
         Array containing the conditions for each group.
     """
 
+    if n_samples_per_cond is None:
+        n_samples_per_cond = data.groupby(conditions).size().min()
     if not all_groups_complete:
         data = remove_groups_missing_conditions(
             data, group, conditions, n_samples_per_cond=n_samples_per_cond
         )
-    if n_samples_per_cond is None:
-        n_samples_per_cond = data.groupby(conditions).size().min()
 
     # Note: groupby ensures that noise correlations are destroyed.
     resampled = data.groupby([group] + conditions).sample(

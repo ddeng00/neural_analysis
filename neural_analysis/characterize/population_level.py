@@ -81,7 +81,7 @@ def compute_decodability(
 
     # determine which cross-validation strategy to use
     if condition is None:
-        if n_splits == 1:
+        if n_repeats == 1:
             cv = StratifiedKFold(
                 n_splits=n_splits, shuffle=shuffle, random_state=random_state
             )
@@ -90,7 +90,7 @@ def compute_decodability(
                 n_splits=n_splits, n_repeats=n_repeats, random_state=random_state
             )
     else:
-        if n_splits == 1:
+        if n_repeats == 1:
             cv = MultiStratifiedKFold(
                 n_splits=n_splits, shuffle=shuffle, random_state=random_state
             )
@@ -199,8 +199,8 @@ def compute_decodability_ct_ind(
 
 def compute_decodability_ct_rel(
     Xs: list[npt.ArrayLike],
-    y: npt.ArrayLike,
-    condition: npt.ArrayLike | None = None,
+    y: npt.ArrayLike | list[npt.ArrayLike],
+    condition: npt.ArrayLike | list[npt.ArrayLike] | None = None,
     *,
     clf: ClassifierMixin = LinearSVC,
     n_splits: int = 5,
@@ -210,23 +210,62 @@ def compute_decodability_ct_rel(
     skip_diagonal: bool = False,
     n_jobs: int | None = None,
 ) -> np.ndarray:
+    """
+    Compute temporal generalization accuracy across multiple related datasets.
+
+    Parameters
+    ----------
+    Xs : list of array-like of shape (n_samples, n_features)
+        List of feature matrices.
+    y : array-like of shape (n_samples,) or list of array-like of shape (n_samples,)
+        Target vector. If a list is provided, only the first element is used for compatibility.
+    condition : array-like of shape (n_samples,) or list of array-like of shape (n_samples,) or None, default=None
+        Group labels for the samples used while splitting the dataset into train/test set.
+        If a list is provided, only the first element is used for compatibility.
+    clf : `sklearn.base.ClassifierMixin`, default=`sklearn.svm.SVC`
+        Classifier to use.
+    n_splits : int, default=5
+        Number of folds.
+    n_repeats : int, default=1
+        Number of times cross-validation needs to be repeated.
+    shuffle : bool, default=False
+        Whether to shuffle the data before splitting into batches. Only relevant if `n_repeats` = 1.
+    clf_kwargs : dict or None, default=None
+        Additional arguments to pass to the classifier.
+    skip_diagonal : bool, default=False
+        If True, skip computation of the diagonal elements of the score matrix.
+    n_jobs : int or None, default=None
+        Number of jobs to run in parallel.
+
+    Returns
+    -------
+    score_matrix : `np.ndarray` for shape (n_samples, n_samples)
+        A square matrix containing the generalization accuracies. Row indices correspond to the
+        training datasets and column indices correspond to the test datasets.
+    """
+
+    # process inputs
+    if isinstance(y, list):
+        y = y[0]
+    if condition is not None and isinstance(condition, list):
+        condition = condition[0]
 
     # initialize score matrix and classifier
     n_samples = len(Xs)
-    score_matrix = np.zeros((n_samples, n_samples))
+    score_matrix = np.zeros((n_splits, n_samples, n_samples))
     clf = clf(**clf_kwargs) if clf_kwargs else clf()
     clf = make_pipeline(StandardScaler(), clf)
 
     # determine which cross-validation strategy to use
     if condition is None:
-        if n_splits == 1:
+        if n_repeats == 1:
             cv = StratifiedKFold(n_splits=n_splits, shuffle=shuffle, random_state=None)
         else:
             cv = RepeatedStratifiedKFold(
                 n_splits=n_splits, n_repeats=n_repeats, random_state=None
             )
     else:
-        if n_splits == 1:
+        if n_repeats == 1:
             cv = MultiStratifiedKFold(
                 n_splits=n_splits, shuffle=shuffle, random_state=None
             )
@@ -238,14 +277,14 @@ def compute_decodability_ct_rel(
     # define worker function
     def fit_and_score(i):
         clf_i = clone(clf)
-        for train_inds, test_inds in cv.split(Xs[i], y, condition):
+        for k, (train_inds, test_inds) in enumerate(cv.split(Xs[i], y, condition)):
             X_train, y_train = Xs[i][train_inds], y[train_inds]
             clf_i.fit(X_train, y_train)
             for j in range(n_samples):
                 if skip_diagonal and i == j:
                     score_matrix[i, j] = np.nan
                 X_test, y_test = Xs[j][test_inds], y[test_inds]
-                score_matrix[i, j] += clf_i.score(X_test, y_test) / n_splits
+                score_matrix[k, i, j] = clf_i.score(X_test, y_test)
 
     # compute generalization scores
     if n_jobs is None or n_jobs == 1:

@@ -48,10 +48,10 @@ def perform_anova(
         formula = f"{target} ~ {' + '.join(factors)}"
     model = ols(formula, data).fit()
     anova_table = anova_lm(model, typ=3 if include_interactions else 2)
-    anova_table = anova_table.iloc[1:-1][["F", "PR(>F)"]]
+    anova_table = anova_table.iloc[1:-1][["sum_sq", "F", "PR(>F)"]]
     anova_table.reset_index(inplace=True)
     anova_table["index"] = anova_table["index"].apply(lambda x: x.split(":"))
-    anova_table.columns = ["factor", "F", "p"]
+    anova_table.columns = ["factor", "sum_sq", "F", "p"]
     return anova_table
 
 

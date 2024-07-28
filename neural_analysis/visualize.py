@@ -560,7 +560,7 @@ def plot_metrics(
             for i, y in enumerate(y_order):
                 df = data[data[y_group] == y]
                 p = anova_oneway(np.sqrt(df[metric]), df[x_group]).pvalue
-                if p < 0.05 / len(np.unique(data[y_group])):
+                if p < 0.05 / len(y_order):
                     to_plot.append(cmap[i])
             x_tests = (
                 (
