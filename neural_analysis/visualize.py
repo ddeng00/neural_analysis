@@ -515,21 +515,34 @@ def plot_metrics(
     # Plot null distribution
     if null is not None:
         old_xlim = ax.get_xlim()
-        null = null.groupby(x_group)[metric].quantile([0.05, 0.95]).unstack()
-        labeled = False
-        for grp, (low, high) in null.iterrows():
-            grp = list(x_order).index(grp)
+        if x_group is None:
+            low, high = null[metric].quantile([0.05, 0.95])
             ax.fill_between(
-                [grp - 0.25, grp + 0.25],
+                [-0.25, 0.25],
                 [low, low],
                 [high, high],
                 color="black",
                 alpha=0.25,
                 zorder=0,
-                label=None if labeled else "Perm. Null\n(5-95th pctl.)",
+                label="Perm. Null\n(5-95th pctl.)",
             )
-            labeled = True
             y_min, y_max = min(y_min, low), max(y_max, high)
+        else:
+            labeled = False
+            null = null.groupby(x_group)[metric].quantile([0.05, 0.95]).unstack()
+            for grp, (low, high) in null.iterrows():
+                grp = list(x_order).index(grp)
+                ax.fill_between(
+                    [grp - 0.25, grp + 0.25],
+                    [low, low],
+                    [high, high],
+                    color="black",
+                    alpha=0.25,
+                    zorder=0,
+                    label=None if labeled else "Perm. Null\n(5-95th pctl.)",
+                )
+                labeled = True
+                y_min, y_max = min(y_min, low), max(y_max, high)
         ax.set_xlim(old_xlim)
 
     # Plot chance level

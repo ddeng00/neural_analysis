@@ -23,14 +23,20 @@ def make_balanced_dichotomies(
         set2 = np.setdiff1d(cond_inds, set1)
         dichotomies.append((conditions[set1], conditions[set2]))
     one_sided = [d[0] for d in dichotomies]
-    # results.append(one_sided if return_one_sided else dichotomies)
+
+    # trivial case where there is only one dichotomy
+    if len(dichotomies) == 1:
+        return (
+            one_sided if return_one_sided else dichotomies,
+            cond_names,
+            np.array([0.0]),
+        )
 
     # compute number of adjacencies
     difficulties = []
     for set1, set2 in dichotomies:
         is_adjacent = [sum(c1 != c2) == 1 for c1, c2 in product(set1, set2)]
         difficulties.append(np.sum(is_adjacent))
-    difficulties = np.array(difficulties)
     min_diff, max_diff = np.min(difficulties), np.max(difficulties)
     difficulties = (difficulties - min_diff) / (max_diff - min_diff)
 
@@ -43,8 +49,8 @@ def make_balanced_dichotomies(
             if diff == 1:
                 dich_names.append("XOR")
             elif diff == 0:
-                for i, cond in enumerate(conditions):
-                    if all(split[:, i] == split[0:i]):
+                for i, cond in enumerate(cond_names):
+                    if all(split[:, i] == split[0, i]):
                         dich_names.append(cond)
                         break
             else:
