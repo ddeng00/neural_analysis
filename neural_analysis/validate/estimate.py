@@ -37,7 +37,7 @@ def resampled_estimate_over_dichotomies(
     # define dichotomies
     unique_conditions = data[conditions].drop_duplicates().values
     dichotomies, dich_names, dich_diffs = make_balanced_dichotomies(
-        unique_conditions, condition_names=conditions, return_one_sided=True
+        unique_conditions, cond_names=conditions, return_one_sided=True
     )
     output["dichotomies"] = dichotomies
     output["dichotomy_names"] = dich_names

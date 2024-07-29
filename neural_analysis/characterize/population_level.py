@@ -1,8 +1,10 @@
+from abc import ABC, abstractmethod
 from warnings import warn
 from itertools import combinations, permutations
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 from sklearn.base import ClassifierMixin
 from sklearn.svm import LinearSVC
 from sklearn.preprocessing import StandardScaler
@@ -18,11 +20,158 @@ from sklearn.base import clone
 
 from joblib import Parallel, delayed
 
+from ..partition import make_balanced_dichotomies
+from ..preprocess import remove_groups_missing_conditions, construct_pseudopopulation
 from ..validate import (
     MultiStratifiedKFold,
     RepeatedMultiStratifiedKFold,
     LeaveNCrossingsOut,
+    permute_data,
+    rotate_data_within_groups,
 )
+from ..utils import isin_2d
+
+
+class _BaseDichotomyEstimator(ABC):
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        unit: str,
+        response: str | list[str],
+        condition: str | list[str],
+        *,
+        n_conditions: int | None = None,
+        n_samples_per_cond: int | None = None,
+        random_state: int | np.random.RandomState | None = None,
+    ) -> None:
+
+        # store data
+        self.data = data
+        self.unit = unit
+        self.response = response
+        self.condition = condition
+
+        # get random state
+        self.random_state = np.random.RandomState(random_state)
+
+        # infer number of samples per condition if not provided
+        if n_samples_per_cond is None:
+            n_samples_per_cond = data.groupby(condition).size().min()
+        self.n_samples_per_cond = n_samples_per_cond
+
+        # remove units missing conditional trials
+        self.n_init = data[unit].nunique()
+        data = remove_groups_missing_conditions(
+            data,
+            unit,
+            condition,
+            n_conditions=n_conditions,
+            n_samples_per_cond=n_samples_per_cond,
+        )
+        self.n_valid = data[unit].nunique()
+
+        # define dichotomies
+        u_conds = data[condition].drop_duplicates().values
+        dichots, dichot_names, dichot_diffs = make_balanced_dichotomies(
+            u_conds, cond_names=condition, return_one_sided=True
+        )
+        self.dichotomies = dichots
+        self.dichotomy_names = dichot_names
+        self.dichotomy_difficulties = dichot_diffs
+
+    @property
+    @abstractmethod
+    def shuffle_fn(self):
+        raise NotImplementedError
+
+    def resample_and_score(
+        self,
+        n_resamples: int = 1,
+        *,
+        permute: bool = False,
+        n_splits: int = 5,
+        n_repeats: int = 1,
+        shuffle: bool = False,
+        clf: ClassifierMixin = LinearSVC,
+        clf_kwargs: dict | None = None,
+        return_clfs: bool = False,
+        n_jobs: int | None = None,
+        random_state: int | np.random.RandomState | None = None,
+    ):
+        def helper(i):
+            # generate new random state
+            global_state = self.random_state.get_state()
+            
+
+            # construct condition-balanced pseudopopulation of units
+            X, condition = construct_pseudopopulation(
+                self.data,
+                self.response,
+                self.unit,
+                self.condition,
+                n_samples_per_cond=self.n_samples_per_cond,
+                all_groups_complete=True,
+                random_state=self.random_state,
+            )
+
+            # fit and validate each dichotomy
+            res = {}
+            for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
+                y = isin_2d(condition, dichot).astype(int)
+                res[dichot_name] = self.fit_and_validate(
+                    X,
+                    y,
+                    condition,
+                    n_splits=n_splits,
+                    n_repeats=n_repeats,
+                    shuffle=shuffle,
+                    clf=clf,
+                    clf_kwargs=clf_kwargs,
+                    return_clfs=return_clfs,
+                    n_jobs=n_jobs,
+                    random_state=random_state,
+                )
+            if not permute:
+                return res
+            
+            # estimate permutation null
+            res_perm = {}
+            X = self.shuffle_fn(X)
+            for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
+                y_perm = self.random_state.permutation(y)
+                res_perm[dichot_name] = self.fit_and_validate(
+                    X,
+                    y_perm,
+                    condition,
+                    n_splits=n_splits,
+                    n_repeats=n_repeats,
+                    shuffle=shuffle,
+                    clf=clf,
+                    clf_kwargs=clf_kwargs,
+                    return_clfs=return_clfs,
+                    random_state=random_state,
+                )
+
+            return res, res_perm
+        
+        
+
+    @staticmethod
+    @abstractmethod
+    def fit_and_validate(
+        X: npt.ArrayLike,
+        y: npt.ArrayLike,
+        condition: npt.ArrayLike | None = None,
+        *,
+        n_splits: int = 5,
+        n_repeats: int = 1,
+        shuffle: bool = False,
+        clf: ClassifierMixin = LinearSVC,
+        clf_kwargs: dict | None = None,
+        return_clfs: bool = False,
+        random_state: int | np.random.RandomState | None = None,
+    ):
+        raise NotImplementedError
 
 
 def compute_decodability(

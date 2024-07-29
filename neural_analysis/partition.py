@@ -6,9 +6,13 @@ import numpy.typing as npt
 
 def make_balanced_dichotomies(
     conditions: npt.ArrayLike,
-    condition_names: list[str] | None = None,
+    cond_names: str | list[str] | None = None,
     return_one_sided: bool = False,
 ):
+    # process input
+    if not isinstance(cond_names, list):
+        cond_names = [cond_names]
+
     # generate dichotomies
     conditions = np.asarray(conditions)
     dichotomies = []
@@ -31,7 +35,7 @@ def make_balanced_dichotomies(
     difficulties = (difficulties - min_diff) / (max_diff - min_diff)
 
     # name dichotomies
-    if condition_names is None:
+    if cond_names is None:
         dich_names = [f"unnamed_{i}" for i in range(len(conditions))]
     else:
         dich_names, seq_ind = [], 0

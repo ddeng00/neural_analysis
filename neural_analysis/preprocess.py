@@ -27,65 +27,43 @@ def inv_norm(arr: npt.ArrayLike, negate: bool = True) -> np.ndarray:
 
 def remove_groups_missing_conditions(
     data: pd.DataFrame,
-    group: str,
-    conditions: list[str],
+    unit: str,
+    condition: str | list[str],
     n_conditions: int | None = None,
     n_samples_per_cond: int = 1,
     return_removed: bool = False,
 ) -> pd.DataFrame:
-    """
-    Remove groups that are missing conditions.
 
-    Parameters
-    ----------
-    data : `pandas.DataFrame`
-        DataFrame containing the data.
-    group : str
-        Column name containing the groups.
-    conditions : list of str
-        Column names containing the conditions.
-    n_conditions : int, optional
-        Number of conditions expected. If None, the number of conditions is
-        inferred from the data.
-    n_samples_per_cond : int, default=1
-        Minimum number of samples per condition required to keep the group.
-    return_removed : bool, default=False
-        If True, return the removed groups.
-
-    Returns
-    -------
-    data : `pandas.DataFrame`
-        DataFrame with groups missing conditions removed.
-    data_removed : `pandas.DataFrame`
-        DataFrame with removed groups. Only returned if `return_removed` is True.
-    """
+    # process inputs
+    if not isinstance(condition, list):
+        condition = [condition]
 
     # infer the number of conditional groups if not provided
     if n_conditions is None:
-        n_conditions = data.groupby(conditions).ngroups
+        n_conditions = data.groupby(condition).ngroups
 
     to_remove = []
     # check for missing conditional groups
-    for grp, df in data.groupby(group):
-        if df.groupby(conditions).ngroups < n_conditions:
+    for grp, df in data.groupby(unit):
+        if df.groupby(condition).ngroups < n_conditions:
             to_remove.append(grp)
     # check for insufficient conditional samples
-    min_cond_cnts = data.groupby(group)[conditions].value_counts().groupby(group).min()
+    min_cond_cnts = data.groupby(unit)[condition].value_counts().groupby(unit).min()
     to_remove.extend(min_cond_cnts[min_cond_cnts < n_samples_per_cond].index)
     to_remove = list(set(to_remove))
 
     if return_removed:
-        data_removed = data[data[group].isin(to_remove)]
-        data = data[~data[group].isin(to_remove)]
+        data_removed = data[data[unit].isin(to_remove)]
+        data = data[~data[unit].isin(to_remove)]
         return data, data_removed
-    return data[~data[group].isin(to_remove)]
+    return data[~data[unit].isin(to_remove)]
 
 
 def construct_pseudopopulation(
     data: pd.DataFrame,
     var: str,
     group: str,
-    conditions: list[str],
+    conditions: str | list[str],
     n_samples_per_cond: int | None = None,
     all_groups_complete: bool = False,
     random_state: int | np.random.RandomState | None = None,
@@ -119,6 +97,9 @@ def construct_pseudopopulation(
     conds : `numpy.ndarray` of shape (n_complete_groups, n_conditions)
         Array containing the conditions for each group.
     """
+
+    if not isinstance(conditions, list):
+        conditions = [conditions]
 
     if n_samples_per_cond is None:
         n_samples_per_cond = data.groupby(conditions).size().min()
