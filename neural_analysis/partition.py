@@ -10,7 +10,7 @@ def make_balanced_dichotomies(
     return_one_sided: bool = False,
 ):
     # process input
-    if not isinstance(cond_names, list):
+    if cond_names is not None and not isinstance(cond_names, list):
         cond_names = [cond_names]
 
     # generate dichotomies
@@ -37,18 +37,17 @@ def make_balanced_dichotomies(
     for set1, set2 in dichotomies:
         is_adjacent = [sum(c1 != c2) == 1 for c1, c2 in product(set1, set2)]
         difficulties.append(np.sum(is_adjacent))
-    min_diff, max_diff = np.min(difficulties), np.max(difficulties)
-    difficulties = (difficulties - min_diff) / (max_diff - min_diff)
 
     # name dichotomies
     if cond_names is None:
         dich_names = [f"unnamed_{i}" for i in range(len(conditions))]
     else:
+        min_diff, max_diff = np.min(difficulties), np.max(difficulties)
         dich_names, seq_ind = [], 0
         for split, diff in zip(one_sided, difficulties):
-            if diff == 1:
+            if diff == max_diff:
                 dich_names.append("XOR")
-            elif diff == 0:
+            elif diff == min_diff:
                 for i, cond in enumerate(cond_names):
                     if all(split[:, i] == split[0, i]):
                         dich_names.append(cond)

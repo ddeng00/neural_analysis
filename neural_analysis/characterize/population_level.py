@@ -5,18 +5,16 @@ from itertools import combinations, permutations, chain
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-from sklearn.base import ClassifierMixin
+from sklearn.base import BaseEstimator
 from sklearn.svm import LinearSVC
 from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import make_pipeline, Pipeline
+from sklearn.pipeline import Pipeline
 from sklearn.model_selection import (
     cross_validate,
-    cross_val_score,
     StratifiedKFold,
     RepeatedStratifiedKFold,
 )
 from scipy.spatial.distance import cosine
-from sklearn.base import clone
 from joblib import Parallel, delayed
 from tqdm import tqdm
 
@@ -61,7 +59,7 @@ class _BaseDichotomyEstimator(ABC):
     dichotomy_difficulties : list of float
         List of dichotomy difficulties, operationalized as the proportion of adjacent condition pairs.
     shuffle_fn : function
-        Function to shuffle data. Must be implemented in subclasses.
+        Function to shuffle data. Must take the feature matrix, group labels, and random state as inputs.
     """
 
     def __init__(
@@ -84,15 +82,13 @@ class _BaseDichotomyEstimator(ABC):
             Number of conditions. If None, the number of conditions is inferred from the data.
         """
 
-        # store data
-        self.data = data
-        self.unit = unit
-        self.response = response
-        self.condition = condition
+        # process conditions
+        if not isinstance(condition, list):
+            condition = [condition]
 
         # infer number of samples per condition if not provided
         if n_samples_per_cond is None:
-            n_samples_per_cond = data.groupby(condition).size().min()
+            n_samples_per_cond = data.groupby([unit] + condition).size().min()
         self.n_samples_per_cond = n_samples_per_cond
 
         # check random seed
@@ -120,6 +116,12 @@ class _BaseDichotomyEstimator(ABC):
         self.dichotomy_names = dichot_names
         self.dichotomy_difficulties = dichot_diffs
 
+        # store data
+        self.data = data
+        self.unit = unit
+        self.response = response
+        self.condition = condition
+
     @property
     @abstractmethod
     def shuffle_fn(self):
@@ -129,16 +131,16 @@ class _BaseDichotomyEstimator(ABC):
         self,
         n_resamples: int = 1,
         *,
-        permute: bool = False,
+        permute: bool = True,
         n_splits: int = 5,
         n_repeats: int = 1,
         shuffle: bool = False,
-        clf: ClassifierMixin = LinearSVC,
+        clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         show_progress: bool = False,
         return_clfs: bool = False,
         n_jobs: int | None = None,
-    ) -> list[dict] | tuple[list[dict], list[dict]]:
+    ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
         """
         Construct resampled pseudopopulations and compute scores for each dichotomy.
 
@@ -154,7 +156,7 @@ class _BaseDichotomyEstimator(ABC):
             Number of times cross-validation needs to be repeated.
         shuffle : bool, default=False
             Whether to shuffle the data before splitting into batches. Only relevant if `n_repeats` = 1.
-        clf : ClassifierMixin, default=LinearSVC
+        clf : `BaseEstimator`, default=LinearSVC
             Classifier to use.
         clf_kwargs : dict or None, default=None
             Additional arguments to pass to the classifier.
@@ -167,20 +169,17 @@ class _BaseDichotomyEstimator(ABC):
 
         Returns
         -------
-        results : list of dict
-            List of dictionaries containing the scores for each dichotomy.
-        null_results : list of dict
-            List of dictionaries containing the scores for each dichotomy under the permutation null.
-            Only available if `permute` is True.
+        results : `pd.DataFrame`
+            DataFrame containing the scores and fitted classifiers (if requested) for each dichotomy.
+            The DataFrame is exploded such that each row corresponds to a single score.
+        null_results : `pd.DataFrame`
+            DataFrame containing the scores and fitted classifiers (if requested) for each dichotomy
+            under the permutation null. The DataFrame is exploded such that each row corresponds to a single score.
         """
 
         def helper(i):
             # generate new random state
-            rs = (
-                np.random.RandomState(self.random_seed + i)
-                if self.random_seed
-                else None
-            )
+            rs = np.random.RandomState(self.random_seed + i)
 
             # construct condition-balanced pseudopopulation of units
             X, condition = construct_pseudopopulation(
@@ -210,13 +209,14 @@ class _BaseDichotomyEstimator(ABC):
                     random_state=rs,
                 )
                 d_res["dichotomy"] = dichot_name
+                d_res["named"] = "unnamed" not in dichot_name
                 res.append(d_res)
             if not permute:
                 return res
 
             # estimate permutation null
             res_perm = []
-            X = self.shuffle_fn(X, rs)
+            X = self.shuffle_fn(X, condition, rs)
             for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
                 y = isin_2d(condition, dichot).astype(int)
                 d_res = self.__class__._fit_and_validate(
@@ -232,6 +232,7 @@ class _BaseDichotomyEstimator(ABC):
                     random_state=rs,
                 )
                 d_res["dichotomy"] = dichot_name
+                d_res["named"] = "unnamed" not in dichot_name
                 res_perm.append(d_res)
 
             return res, res_perm
@@ -280,7 +281,7 @@ class _BaseDichotomyEstimator(ABC):
         n_splits: int = 5,
         n_repeats: int = 1,
         shuffle: bool = False,
-        clf: ClassifierMixin = LinearSVC,
+        clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
         random_state: int | np.random.RandomState | None = None,
@@ -302,7 +303,7 @@ class _BaseDichotomyEstimator(ABC):
             Number of times cross-validation needs to be repeated.
         shuffle : bool, default=False
             Whether to shuffle the data before splitting into batches. Only relevant if `n_repeats` = 1.
-        clf : ClassifierMixin, default=LinearSVC
+        clf : `BaseEstimator`, default=LinearSVC
             Classifier to use.
         clf_kwargs : dict or None, default=None
             Additional arguments to pass to the classifier.
@@ -354,7 +355,7 @@ class DichotomyDecoding(_BaseDichotomyEstimator):
 
     @property
     def shuffle_fn(self):
-        return lambda X, rs: permute_data(X, random_state=rs)
+        return lambda X, groups, rs: permute_data(X, random_state=rs)
 
     @staticmethod
     def _fit_and_validate(
@@ -365,7 +366,7 @@ class DichotomyDecoding(_BaseDichotomyEstimator):
         n_splits: int = 5,
         n_repeats: int = 1,
         shuffle: bool = False,
-        clf: ClassifierMixin = LinearSVC,
+        clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
         random_state: int | np.random.RandomState | None = None,
@@ -408,11 +409,11 @@ class DichotomyDecoding(_BaseDichotomyEstimator):
         )
         if return_clfs:
             return {
-                "scores": results["test_score"],
+                "scores": np.mean(results["test_score"]),
                 "clfs": [clf.named_steps["clf"] for clf in results["estimator"]],
             }
         else:
-            return {"scores": results["test_score"]}
+            return {"scores": np.mean(results["test_score"])}
 
 
 class DichotomyCCGP(_BaseDichotomyEstimator):
@@ -462,7 +463,7 @@ class DichotomyCCGP(_BaseDichotomyEstimator):
         n_splits: None = None,
         n_repeats: None = None,
         shuffle: None = None,
-        clf: ClassifierMixin = LinearSVC,
+        clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
         random_state: int | np.random.RandomState | None = None,
@@ -484,7 +485,7 @@ class DichotomyCCGP(_BaseDichotomyEstimator):
             Ignored. Only present for compatibility with the base class.
         shuffle : None
             Ignored. Only present for compatibility with the base class.
-        clf : ClassifierMixin, default=LinearSVC
+        clf : `BaseEstimator`, default=LinearSVC
             Classifier to use.
         clf_kwargs : dict or None, default=None
             Additional arguments to pass to the classifier.
@@ -517,11 +518,11 @@ class DichotomyCCGP(_BaseDichotomyEstimator):
         )
         if return_clfs:
             return {
-                "scores": results["test_score"],
+                "scores": np.mean(results["test_score"]),
                 "clfs": [clf.named_steps["clf"] for clf in results["estimator"]],
             }
         else:
-            return {"scores": results["test_score"]}
+            return {"scores": np.mean(results["test_score"])}
 
 
 class DichotomyPS(_BaseDichotomyEstimator):
@@ -626,7 +627,7 @@ class DichotomyPS(_BaseDichotomyEstimator):
                 best_score = curr_score
                 best_similarities = curr_sims
 
-        return {"scores": [best_similarities]}
+        return {"scores": best_similarities}
 
 
 # def compute_decodability_ct_ind(
@@ -634,7 +635,7 @@ class DichotomyPS(_BaseDichotomyEstimator):
 #     ys: list[npt.ArrayLike],
 #     conditions: list[npt.ArrayLike],
 #     *,
-#     clf: ClassifierMixin = LinearSVC,
+#     clf: BaseEstimator = LinearSVC,
 #     n_splits: int = 5,
 #     n_repeats: int = 1,
 #     shuffle: bool = False,
@@ -710,7 +711,7 @@ class DichotomyPS(_BaseDichotomyEstimator):
 #     y: npt.ArrayLike | list[npt.ArrayLike],
 #     condition: npt.ArrayLike | list[npt.ArrayLike] | None = None,
 #     *,
-#     clf: ClassifierMixin = LinearSVC,
+#     clf: BaseEstimator = LinearSVC,
 #     n_splits: int = 5,
 #     n_repeats: int = 1,
 #     shuffle: bool = False,
@@ -807,7 +808,7 @@ class DichotomyPS(_BaseDichotomyEstimator):
 #     ys: list[npt.ArrayLike],
 #     conditions: list[npt.ArrayLike],
 #     *,
-#     clf: ClassifierMixin = LinearSVC,
+#     clf: BaseEstimator = LinearSVC,
 #     n_crossings: int = 1,
 #     clf_kwargs: dict | None = None,
 #     skip_diagonal: bool = False,
