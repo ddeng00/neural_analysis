@@ -102,7 +102,7 @@ def construct_pseudopopulation(
         conditions = [conditions]
 
     if n_samples_per_cond is None:
-        n_samples_per_cond = data.groupby(conditions).size().min()
+        n_samples_per_cond = data.groupby([group] + conditions).size().min()
     if not all_groups_complete:
         data = remove_groups_missing_conditions(
             data, group, conditions, n_samples_per_cond=n_samples_per_cond
@@ -114,7 +114,7 @@ def construct_pseudopopulation(
     )
 
     # Note: previous groupby ensures that conditions are sorted
-    X = np.column_stack(resampled.groupby(group)[var].apply(np.asarray))
+    X = np.column_stack(resampled.groupby(group)[var].apply(np.vstack))
     X = X.astype(float)
     conds = resampled[conditions].iloc[: len(X)].to_numpy(str)
 
