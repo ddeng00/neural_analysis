@@ -1,13 +1,22 @@
+from collections import defaultdict
+from itertools import combinations
+
 import numpy as np
 import pandas as pd
 import numpy.typing as npt
+from matplotlib import colormaps
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.stats import sem
 from scipy.ndimage import gaussian_filter1d
 from statsmodels.stats.oneway import anova_oneway
-from statsmodels.discrete.discrete_model import Poisson
+from sklearn.decomposition import PCA
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from mayavi import mlab
+from scipy.spatial import ConvexHull
 
+from .preprocess import remove_groups_missing_conditions
 from .statistics import compute_confidence_interval
 
 
@@ -603,5 +612,223 @@ def plot_metrics(
     ax.legend()
     sns.despine(ax=ax)
     sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1), title=None, frameon=False)
+
+    return ax
+
+
+def plot_projection(
+    data: pd.DataFrame,
+    unit: str,
+    response: str,
+    condition: str | list[str],
+    cmap: str = "tab10",
+    interactive: bool = False,
+    ax: plt.Axes | None = None,
+) -> plt.Axes:
+    """
+    Plot a 3D projection of the data using PCA.
+
+    This function plots a 3D projection of the data using PCA. Each point in the plot represents the mean response of
+    a unit to different conditions. The points are colored based on the conditions.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        The data to plot.
+    unit : str
+        The column name of the unit identifier.
+    response : str
+        The column name of the response variable.
+    condition : str or list of str
+        The column name(s) of the condition(s) to plot.
+    cmap : str, default='tab10'
+        The name of the colormap to use for coloring the conditions.
+    interactive : bool, default=False
+        If True, the plot is displayed interactively using Mayavi.
+    ax : `matplotlib.pyplot.Axes` or None, default=None
+        A matplotlib Axes object. If None, a new figure and axes are created.
+
+    Returns
+    -------
+    ax : `matplotlib.pyplot.Axes`
+        The Axes object containing the plot.
+    """
+
+    # check inputs
+    if isinstance(condition, str):
+        condition = [condition]
+    cmap = colormaps.get_cmap(cmap)
+
+    # create a new figure if no Axes object is provided
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 8))
+
+    # process data
+    data = remove_groups_missing_conditions(data, unit, condition)
+    unit_std = data.groupby(unit)[response].std()
+    to_remove = unit_std[unit_std == 0].index
+    data = data[~data[unit].isin(to_remove)]
+
+    # fit PCA via bootstrapping
+    pca = Pipeline([("scaler", StandardScaler()), ("pca", PCA(n_components=3))])
+    X_boot = data.groupby([unit] + condition).sample(n=1000, replace=True)
+    X_boot = np.column_stack(X_boot.groupby(unit)[response].apply(np.vstack))
+    X_boot = X_boot.astype(float)
+    pca = pca.fit(X_boot)
+
+    # aggregate population data and apply PCA transformation
+    pop_mean = (
+        data.groupby([unit] + condition)[response]
+        .mean()
+        .groupby(condition)
+        .agg(list)
+        .reset_index()
+    )
+    X_mean = pca.transform(np.stack(pop_mean[response]))
+
+    # generate plotting styles
+    y = pop_mean[condition].to_numpy(dtype=str)
+    offset, colors_lv1 = 0, None
+
+    # define color for first level of condition (if applicable)
+    if len(condition) > 1:
+        u_lv1, _ = np.unique(y[:, 0], return_inverse=True)
+        offset = len(u_lv1)
+        colors_lv1 = {u: cmap(i) for i, u in enumerate(u_lv1)}
+
+    # define color for all conditions
+    start = 0 if len(condition) == 1 else 1
+    _, l_all = np.unique(y[:, start:], return_inverse=True, axis=0)
+    colors_all = [cmap(l + offset) for l in l_all]
+
+    # set up the figure
+    fig = mlab.figure(size=(1000, 1000))
+
+    xmin, xmax = np.min(X_mean[:, 0]), np.max(X_mean[:, 0])
+    ymin, ymax = np.min(X_mean[:, 1]), np.max(X_mean[:, 1])
+    zmin, zmax = np.min(X_mean[:, 2]), np.max(X_mean[:, 2])
+    max_val = max(xmax - xmin, ymax - ymin, zmax - zmin)
+
+    # plot edges
+    tube_radius = 0.02 * max_val
+    if len(condition) > 1:
+        edge_sets = defaultdict(list)
+        for i, j in combinations(range(len(y)), 2):
+            li, lj = y[i], y[j]
+            Xi, Xj = X_mean[i], X_mean[j]
+            if li[0] != lj[0] and np.all(li[1:] == lj[1:]):
+                mlab.plot3d(
+                    [Xi[0], Xj[0]],
+                    [Xi[1], Xj[1]],
+                    [Xi[2], Xj[2]],
+                    tube_radius=tube_radius / 2,
+                    color=(1, 1, 1),
+                    opacity=0.25,
+                )
+            elif li[0] == lj[0] and np.sum(li[1:] == lj[1:]) == 1:
+                edge_sets[li[0]].extend([Xi, Xj])
+                mlab.plot3d(
+                    [Xi[0], Xj[0]],
+                    [Xi[1], Xj[1]],
+                    [Xi[2], Xj[2]],
+                    tube_radius=tube_radius,
+                    color=colors_lv1[li[0]][0:3],
+                )
+
+    # plot faces
+    if len(condition) > 2:
+        for cond, edges in edge_sets.items():
+            vertices = np.unique(edges, axis=0)
+            triangles = ConvexHull(vertices).simplices
+            mlab.triangular_mesh(
+                vertices[:, 0],
+                vertices[:, 1],
+                vertices[:, 2],
+                triangles,
+                color=colors_lv1[cond][0:3],
+                opacity=0.25,
+            )
+
+    # plot points
+    point_radius = 0.1 * max_val
+    for i in range(len(X_mean)):
+        xx, yy, zz = X_mean[i]
+        mlab.points3d(xx, yy, zz, color=colors_all[i][0:3], scale_factor=point_radius)
+
+    # add coordinate axes
+    mlab.plot3d(
+        [xmin, xmax],
+        [ymin, ymin],
+        [zmax, zmax],
+        tube_radius=0.005 * max_val,
+        color=(0, 0, 0),
+    )
+    mlab.plot3d(
+        [xmin, xmin],
+        [ymin, ymax],
+        [zmax, zmax],
+        tube_radius=0.005 * max_val,
+        color=(0, 0, 0),
+    )
+    mlab.plot3d(
+        [xmin, xmin],
+        [ymin, ymin],
+        [zmin, zmax],
+        tube_radius=0.005 * max_val,
+        color=(0, 0, 0),
+    )
+
+    # label axes
+    var_explained = pca.named_steps["pca"].explained_variance_ratio_ * 100
+    mlab.text3d(  # x-label
+        (xmax + xmin) / 2 - (xmax - xmin) * 0.33,
+        ymin - (ymax - ymin) * 0.04,
+        zmax + (zmax - zmin) * 0.05,
+        f"PC1\n({var_explained[0]:.1f}%)",
+        scale=0.025 * max_val,
+        color=(1, 1, 1),
+    )
+    mlab.text3d(  # y-label
+        xmin - (xmax - xmin) * 0.1,
+        (ymax + ymin) / 2 - (ymax - ymin) * 0.33,
+        zmax + (zmax - zmin) * 0.05,
+        f"PC2\n({var_explained[1]:.1f}%)",
+        scale=0.025 * max_val,
+        color=(1, 1, 1),
+    )
+    mlab.text3d(  # z-label
+        xmin - (xmax - xmin) * 0.1,
+        ymin - (ymax - ymin) * 0.04,
+        zmax,
+        f"PC3\n({var_explained[2]:.1f}%)",
+        scale=0.025 * max_val,
+        color=(1, 1, 1),
+    )
+
+    # set viewpoint
+    mlab.view(azimuth=0, elevation=0, distance="auto", focalpoint="auto")
+    fig.scene._lift()
+
+    # convert to image for Matplotlib
+    img = mlab.screenshot(figure=fig, mode="rgb", antialiased=True)
+    img = img[150:-150, 150:-150]
+    if interactive:
+        mlab.show()
+    else:
+        mlab.close()
+    ax.imshow(img)
+    ax.axis("off")
+
+    # add legend
+    if len(condition) > 2:
+        for k, v in colors_lv1.items():
+            ax.plot([], [], lw=5, color=v, label=k)
+    elif len(condition) > 1:
+        for k, v in colors_lv1.items():
+            ax.plot([], [], color=v, label=k)
+    for i, label in enumerate(y[:, start:]):
+        ax.plot([], [], "o", color=colors_all[i], label=" × ".join(label))
+    remove_duplicate_legend_entries(ax)
+    sns.move_legend(ax, loc="upper left", bbox_to_anchor=(1, 1), frameon=False)
 
     return ax

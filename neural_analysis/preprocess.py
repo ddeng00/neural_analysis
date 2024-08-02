@@ -66,6 +66,7 @@ def construct_pseudopopulation(
     conditions: str | list[str],
     n_samples_per_cond: int | None = None,
     all_groups_complete: bool = False,
+    bootstrap: bool = False,
     random_state: int | np.random.RandomState | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -87,6 +88,8 @@ def construct_pseudopopulation(
     all_groups_complete : bool, default=False
         If True, all conditions are assumed to be present in each group. If False,
         groups missing conditions will be removed.
+    bootstrap : bool, default=False
+        If True, resample the data with replacement.
     random_state : int, RandomState or None, optional
         Random state for resampling.
 
@@ -110,7 +113,7 @@ def construct_pseudopopulation(
 
     # Note: groupby ensures that noise correlations are destroyed.
     resampled = data.groupby([group] + conditions).sample(
-        n=n_samples_per_cond, random_state=random_state
+        n=n_samples_per_cond, replace=bootstrap, random_state=random_state
     )
 
     # Note: previous groupby ensures that conditions are sorted
