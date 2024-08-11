@@ -61,14 +61,13 @@ def remove_groups_missing_conditions(
 
 def construct_pseudopopulation(
     data: pd.DataFrame,
-    var: str,
-    group: str,
-    conditions: str | list[str],
+    unit: str,
+    response: str | list[str],
+    condition: str | list[str],
     n_samples_per_cond: int | None = None,
     all_groups_complete: bool = False,
-    bootstrap: bool = False,
     random_state: int | np.random.RandomState | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray] | tuple[list[np.ndarray], np.ndarray]:
     """
     Construct a pseudopopulation from the given data.
 
@@ -76,20 +75,18 @@ def construct_pseudopopulation(
     ----------
     data : pd.DataFrame
         DataFrame containing the data.
-    var : str
-        Column name containing the variable.
-    group : str
-        Column name containing the groups.
-    conditions : List[str]
-        Column names containing the conditions.
+    unit : str
+        Column name containing the units.
+    response : str or List[str]
+        Column name(s)  containing the response(s).
+    condition : str or List[str]
+        Column name(s) containing the conditions.
     n_samples_per_cond : int or None, optional
         Number of samples per condition. If None, the minimum number of samples
         across all conditions will be used.
     all_groups_complete : bool, default=False
         If True, all conditions are assumed to be present in each group. If False,
         groups missing conditions will be removed.
-    bootstrap : bool, default=False
-        If True, resample the data with replacement.
     random_state : int, RandomState or None, optional
         Random state for resampling.
 
@@ -101,24 +98,32 @@ def construct_pseudopopulation(
         Array containing the conditions for each group.
     """
 
-    if not isinstance(conditions, list):
-        conditions = [conditions]
+    if not isinstance(condition, list):
+        condition = [condition]
 
     if n_samples_per_cond is None:
-        n_samples_per_cond = data.groupby([group] + conditions).size().min()
+        n_samples_per_cond = data.groupby([unit] + condition).size().min()
     if not all_groups_complete:
         data = remove_groups_missing_conditions(
-            data, group, conditions, n_samples_per_cond=n_samples_per_cond
+            data, unit, condition, n_samples_per_cond=n_samples_per_cond
         )
 
     # Note: groupby ensures that noise correlations are destroyed.
-    resampled = data.groupby([group] + conditions).sample(
-        n=n_samples_per_cond, replace=bootstrap, random_state=random_state
+    resampled = data.groupby([unit] + condition).sample(
+        n=n_samples_per_cond, random_state=random_state
     )
 
     # Note: previous groupby ensures that conditions are sorted
-    X = np.column_stack(resampled.groupby(group)[var].apply(np.vstack))
-    X = X.astype(float)
-    conds = resampled[conditions].iloc[: len(X)].to_numpy(str)
-
-    return X, conds
+    if not isinstance(response, list):
+        X = np.column_stack(resampled.groupby(unit)[response].apply(np.vstack)).astype(
+            float
+        )
+        conds = resampled[condition].iloc[: len(X)].to_numpy(str)
+        return X, conds
+    else:
+        Xs = [
+            np.column_stack(resampled.groupby(unit)[v].apply(np.vstack)).astype(float)
+            for v in response
+        ]
+        conds = resampled[condition].iloc[: len(X[0])].to_numpy(str)
+        return Xs, conds
