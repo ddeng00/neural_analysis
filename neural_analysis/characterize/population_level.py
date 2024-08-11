@@ -365,7 +365,6 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         *,
         n_conditions: int | None = None,
         n_samples_per_cond: int | None = None,
-        skip_diagnoal: bool = False,
         random_seed: int | None = None,
     ) -> None:
 
@@ -373,7 +372,6 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         if len(responses) < 2:
             raise ValueError("At least two responses are required for generalization.")
         self.responses = responses
-        self.skip_diagnoal = skip_diagnoal
         super().__init__(
             data,
             unit,
@@ -416,22 +414,21 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
             y = isin_2d(condition, dichot).astype(int)
             for i, j in combinations(range(len(self.responses)), 2):
-                if self.skip_diagnoal and i == j:
-                    d_res = {"scores": np.nan, "clfs": None}
-                else:
-                    d_res = self.__class__.validate(
-                        Xs[i],
-                        Xs[j],
-                        y,
-                        condition,
-                        n_splits=n_splits,
-                        n_repeats=n_repeats,
-                        shuffle=shuffle,
-                        clf=clf,
-                        clf_kwargs=clf_kwargs,
-                        return_clfs=return_clfs,
-                        random_state=rs,
-                    )
+                if i == j:
+                    continue
+                d_res = self.__class__.validate(
+                    Xs[i],
+                    Xs[j],
+                    y,
+                    condition,
+                    n_splits=n_splits,
+                    n_repeats=n_repeats,
+                    shuffle=shuffle,
+                    clf=clf,
+                    clf_kwargs=clf_kwargs,
+                    return_clfs=return_clfs,
+                    random_state=rs,
+                )
                 d_res["dichotomy"] = dichot_name
                 d_res["named"] = "unnamed" not in dichot_name
                 d_res["train"] = self.responses[i]
@@ -446,22 +443,21 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
             y = isin_2d(condition, dichot).astype(int)
             for i, j in combinations(range(len(self.responses)), 2):
-                if self.skip_diagnoal and i == j:
-                    d_res = {"scores": np.nan, "clfs": None}
-                else:
-                    d_res = self.__class__.validate(
-                        Xs[i],
-                        Xs[j],
-                        y,
-                        condition,
-                        n_splits=n_splits,
-                        n_repeats=n_repeats,
-                        shuffle=shuffle,
-                        clf=clf,
-                        clf_kwargs=clf_kwargs,
-                        return_clfs=return_clfs,
-                        random_state=rs,
-                    )
+                if i == j:
+                    continue
+                d_res = self.__class__.validate(
+                    Xs[i],
+                    Xs[j],
+                    y,
+                    condition,
+                    n_splits=n_splits,
+                    n_repeats=n_repeats,
+                    shuffle=shuffle,
+                    clf=clf,
+                    clf_kwargs=clf_kwargs,
+                    return_clfs=return_clfs,
+                    random_state=rs,
+                )
                 d_res["dichotomy"] = dichot_name
                 d_res["named"] = "unnamed" not in dichot_name
                 d_res["train"] = self.responses[i]
@@ -481,6 +477,185 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         n_splits: int = 5,
         n_repeats: int = 1,
         shuffle: bool = False,
+        clf: BaseEstimator = LinearSVC,
+        clf_kwargs: dict | None = None,
+        return_clfs: bool = False,
+        random_state: int | np.random.RandomState | None = None,
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        unit: str,
+        response: str,
+        condition: str | list[str],
+        group: str | None = None,
+        *,
+        n_conditions: int | None = None,
+        n_samples_per_cond: int | list[int] | None = None,
+        random_seed: int | None = None,
+    ) -> None:
+
+        # process conditions
+        if not isinstance(condition, list):
+            condition = [condition]
+        u_conds = data[condition].drop_duplicates().values
+
+        # process sample groups
+        tmp_data, tmp_grp = [], []
+        for k, v in data.groupby(group):
+            tmp_data.append(v)
+            tmp_grp.append(k)
+        data = tmp_data
+        group = tmp_grp
+        if len(data) < 2:
+            raise ValueError("At least two groups are required for generalization.")
+
+        # infer number of samples per condition if not provided
+        if n_samples_per_cond is None:
+            n_samples_per_cond = [v.groupby(condition).size().min() for v in data]
+        elif isinstance(n_samples_per_cond, int):
+            n_samples_per_cond = [n_samples_per_cond] * len(data)
+        elif len(n_samples_per_cond) != len(data):
+            raise ValueError(
+                "Number of samples per condition must be provided for each sample group."
+            )
+        self.n_samples_per_cond = n_samples_per_cond
+
+        # check random seed
+        self.random_seed = (
+            np.random.randint(1e6) if random_seed is None else random_seed
+        )
+
+        # remove units missing conditional trials
+        self.n_inits = [v[unit].nunique() for v in data]
+        data = [
+            remove_groups_missing_conditions(
+                v,
+                unit,
+                condition,
+                n_conditions=n_conditions,
+                n_samples_per_cond=nspc,
+            )
+            for v, nspc in zip(data, n_samples_per_cond)
+        ]
+        self.n_valids = [v[unit].nunique() for v in data]
+
+        # define dichotomies
+        dichots, dichot_names, dichot_diffs = make_balanced_dichotomies(
+            u_conds, cond_names=condition, return_one_sided=True
+        )
+        self.dichotomies = dichots
+        self.dichotomy_names = dichot_names
+        self.dichotomy_difficulties = dichot_diffs
+
+        # store data
+        self.data = data
+        self.unit = unit
+        self.response = response
+        self.condition = condition
+        self.group = group
+
+    def _score_helper(
+        self,
+        i: int,
+        n_splits: None,
+        n_repeats: None,
+        shuffle: None,
+        clf: BaseEstimator,
+        clf_kwargs: dict | None,
+        return_clfs: bool,
+        permute: bool,
+    ) -> list[pd.DataFrame] | tuple[list[pd.DataFrame], list[pd.DataFrame]]:
+
+        # generate new random state
+        rs = np.random.RandomState(self.random_seed + i)
+
+        # construct condition-balanced pseudopopulation of units
+        Xs, conditions = [], []
+        for v, nspc in zip(self.data, self.n_samples_per_cond):
+            X, condition = construct_pseudopopulation(
+                v,
+                self.unit,
+                self.response,
+                self.condition,
+                n_samples_per_cond=nspc,
+                all_groups_complete=True,
+                random_state=rs,
+            )
+            Xs.append(X)
+            conditions.append(condition)
+
+        # fit and validate each dichotomy
+        res = []
+        for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
+            for i, j in combinations(range(len(self.data)), 2):
+                if i == j:
+                    continue
+                yi = isin_2d(conditions[i], dichot).astype(int)
+                yj = isin_2d(conditions[j], dichot).astype(int)
+                d_res = self.__class__.validate(
+                    Xs[i],
+                    Xs[j],
+                    yi,
+                    yj,
+                    conditions[i],
+                    conditions[j],
+                    clf=clf,
+                    clf_kwargs=clf_kwargs,
+                    return_clfs=return_clfs,
+                    random_state=rs,
+                )
+                d_res["dichotomy"] = dichot_name
+                d_res["named"] = "unnamed" not in dichot_name
+                d_res["train"] = self.group[i]
+                d_res["test"] = self.group[j]
+                res.append(d_res)
+        if not permute:
+            return res
+
+        # estimate permutation null
+        res_perm = []
+        Xs = [self.shuffle(X, condition, rs) for X, condition in zip(Xs, conditions)]
+        for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
+            for i, j in combinations(range(len(self.data)), 2):
+                if i == j:
+                    continue
+                yi = isin_2d(conditions[i], dichot).astype(int)
+                yj = isin_2d(conditions[j], dichot).astype(int)
+                d_res = self.__class__.validate(
+                    Xs[i],
+                    Xs[j],
+                    yi,
+                    yj,
+                    conditions[i],
+                    conditions[j],
+                    clf=clf,
+                    clf_kwargs=clf_kwargs,
+                    return_clfs=return_clfs,
+                    random_state=rs,
+                )
+                d_res["dichotomy"] = dichot_name
+                d_res["named"] = "unnamed" not in dichot_name
+                d_res["train"] = self.group[i]
+                d_res["test"] = self.group[j]
+                res_perm.append(d_res)
+
+        return res, res_perm
+
+    @staticmethod
+    @abstractmethod
+    def validate(
+        X1: npt.ArrayLike,
+        X2: npt.ArrayLike,
+        y1: npt.ArrayLike,
+        y2: npt.ArrayLike,
+        condition1: npt.ArrayLike | None = None,
+        condition2: npt.ArrayLike | None = None,
+        *,
         clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
@@ -591,11 +766,11 @@ class RelatedSamplesDecodability(_BaseRelatedSamplesGeneralizer):
 
     @staticmethod
     def shuffle(
-        Xs: list[npt.ArrayLike], condition: npt.ArrayLike, rs: np.random.RandomState
+        X: list[npt.ArrayLike], condition: npt.ArrayLike, rs: np.random.RandomState
     ) -> list[npt.ArrayLike]:
-        perm_inds = np.arange(Xs[0].shape[0])
+        perm_inds = np.arange(X[0].shape[0])
         perm_inds = permute_data(perm_inds, random_state=rs)
-        return [X[perm_inds] for X in Xs]
+        return [Xi[perm_inds] for Xi in X]
 
     @staticmethod
     def validate(
@@ -611,7 +786,7 @@ class RelatedSamplesDecodability(_BaseRelatedSamplesGeneralizer):
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
         random_state: int | np.random.RandomState | None = None,
-    ) -> dict[str, list]:
+    ) -> dict[str, Any]:
 
         # initialize classifier
         clf = clf(**clf_kwargs) if clf_kwargs else clf()
@@ -650,6 +825,42 @@ class RelatedSamplesDecodability(_BaseRelatedSamplesGeneralizer):
             return {"scores": np.mean(scores), "clfs": clfs}
         else:
             return {"scores": np.mean(scores)}
+
+
+class IndependentSamplesDecodability(_BaseIndependentSamplesGeneralizer):
+
+    @staticmethod
+    def shuffle(
+        X: npt.ArrayLike, condition: npt.ArrayLike, rs: np.random.RandomState
+    ) -> npt.ArrayLike:
+        return permute_data(X, random_state=rs)
+
+    @staticmethod
+    def validate(
+        X1: npt.ArrayLike,
+        X2: npt.ArrayLike,
+        y1: npt.ArrayLike,
+        y2: npt.ArrayLike,
+        condition1: npt.ArrayLike | None = None,
+        condition2: npt.ArrayLike | None = None,
+        *,
+        clf: BaseEstimator = LinearSVC,
+        clf_kwargs: dict | None = None,
+        return_clfs: bool = False,
+        random_state: int | np.random.RandomState | None = None,
+    ) -> dict[str, Any]:
+
+        # initialize classifier
+        clf = clf(**clf_kwargs) if clf_kwargs else clf()
+        clf = Pipeline([("scaler", StandardScaler()), ("clf", clf)])
+
+        # test generalization
+        clf.fit(X1, y1)
+        score = clf.score(X2, y2)
+        if return_clfs:
+            return {"scores": score, "clfs": clf.named_steps["clf"]}
+        else:
+            return {"scores": score}
 
 
 class CCGP(_BaseEstimator):

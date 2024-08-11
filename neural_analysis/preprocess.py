@@ -125,5 +125,5 @@ def construct_pseudopopulation(
             np.column_stack(resampled.groupby(unit)[v].apply(np.vstack)).astype(float)
             for v in response
         ]
-        conds = resampled[condition].iloc[: len(X[0])].to_numpy(str)
+        conds = resampled[condition].iloc[: len(Xs[0])].to_numpy(str)
         return Xs, conds
