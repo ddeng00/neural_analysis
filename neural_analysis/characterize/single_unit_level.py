@@ -1,15 +1,21 @@
 from typing import Callable
+from itertools import product
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from statsmodels.formula.api import ols
 from statsmodels.stats.anova import anova_lm
+from statsmodels.stats.rates import test_poisson
+
+from ..spikes import compute_spike_rates, get_spikes
 
 
 def perform_anova(
     data: pd.DataFrame,
     target: str,
-    factors: list[str],
+    factor: str | list[str],
+    nuisance: str | list[str] | None = None,
     *,
     target_transform: Callable | None = np.sqrt,
     include_interactions: bool = True,
@@ -38,303 +44,95 @@ def perform_anova(
         The ANOVA table.
     """
 
-    data = data[[target] + factors].copy()
+    # process inputs
+    if not isinstance(factor, list):
+        factor = [factor]
+    if nuisance is not None and not isinstance(nuisance, list):
+        nuisance = [nuisance]
+
+    # process data
+    data = data[[target] + factor].copy()
     if target_transform is not None:
         data[target] = data[target].apply(target_transform)
-    data[factors] = data[factors].astype("category")
+    data[factor] = data[factor].astype("category")
+
+    # regress out nuisance variables
+    if nuisance is not None:
+        formula = f"{target} ~ {' + '.join(nuisance)}"
+        model = ols(formula, data).fit()
+        data[target] = model.resid
+
+    # perform ANOVA
     if include_interactions:
-        formula = f"{target} ~ {' * '.join(factors)}"
+        formula = f"{target} ~ {' * '.join(factor)}"
     else:
-        formula = f"{target} ~ {' + '.join(factors)}"
+        formula = f"{target} ~ {' + '.join(factor)}"
     model = ols(formula, data).fit()
     anova_table = anova_lm(model, typ=3 if include_interactions else 2)
     anova_table = anova_table.iloc[1:-1][["sum_sq", "F", "PR(>F)"]]
     anova_table.reset_index(inplace=True)
     anova_table["index"] = anova_table["index"].apply(lambda x: x.split(":"))
     anova_table.columns = ["factor", "sum_sq", "F", "p"]
+
     return anova_table
 
 
-# def poisson_overdispersion_test(results: PoissonResults, alpha: float = 0.05) -> bool:
-#     """
-#     Significance test for overdispersion in Poisson GLM.
-
-#     Parameters
-#     ----------
-#     results : PoissonResults
-#         Results of Poisson GLM.
-#     alpha : float
-#         Desired significance level.
-
-#     Returns
-#     -------
-#     bool
-#         True if overdispersion is significant, False otherwise.
-
-#     Reference
-#     ---------
-#     [1] Lee, S., Park, C., & Kim, B.S. (1995). Tests for detecting overdispersion in poisson models. Communications in Statistics-theory and Methods, 24, 2405-2420.
-#     [2] Blasco-Moreno, A., Pérez-Casany, M., Puig, P., Morante, M.D., & Castells, E. (2019). What does a zero mean? Understanding false, random and structural zeros in ecology. Methods in Ecology and Evolution, 10, 949 - 959. doi: 10.1111/2041-210X.13175
-#     """
-
-#     # get variables
-#     endog = results.model.endog
-#     pred = results.predict()
-
-#     # compute test statistic
-#     f1 = np.sum((endog - pred) ** 2 / pred)
-#     f2 = np.sqrt(2 * np.sum(pred**2))
-#     test_statistic = f1 / f2
-
-#     # compute p-value
-#     pvalue = norm.sf(test_statistic)
-#     return pvalue <= alpha
-
-
-# def zip_overdispersion_test(
-#     results: ZeroInflatedPoissonResults, alpha: float = 0.05
-# ) -> bool:
-#     """
-#     Significance test for overdispersion in zero-inflated Poisson GLM.
-
-#     Parameters
-#     ----------
-#     results : ZeroInflatedPoissonResults
-#         Results of zero-inflated Poisson GLM.
-#     alpha : float
-#         Desired significance level.
-
-#     Returns
-#     -------
-#     bool
-#         True if overdispersion is significant, False otherwise.
-
-#     References
-#     ----------
-#     [1] Ridout, M.S., Hinde, J.P., & Demétrio, C.G. (2001). A Score Test for Testing a Zero-Inflated Poisson Regression Model Against Zero-Inflated Negative Binomial Alternatives. Biometrics, 57. doi: 10.1111/j.0006-341X.2001.00800.x
-#     [2] Blasco-Moreno, A., Pérez-Casany, M., Puig, P., Morante, M.D., & Castells, E. (2019). What does a zero mean? Understanding false, random and structural zeros in ecology. Methods in Ecology and Evolution, 10, 949 - 959. doi: 10.1111/2041-210X.13175
-#     """
-
-#     # get variables
-#     exog, endog = results.model.exog, results.model.endog
-#     infl_ratio = np.exp(results.params["inflate_const"])
-#     infl_ratio = infl_ratio / (1 + infl_ratio)
-#     pred = np.exp(exog @ results.params.drop("inflate_const"))
-#     i0 = (endog == 0).astype(int)
-#     p0 = infl_ratio + (1 - infl_ratio) * np.exp(-pred)
-
-#     # compute test statistic
-#     f1 = (endog - pred) ** 2 - endog
-#     f2 = -i0 * pred**2 * infl_ratio / p0
-#     test_statistic = 0.5 * np.sum(f1 + f2)
-
-#     # compute p-value
-#     pvalue = norm.sf(test_statistic)
-#     return pvalue <= alpha
-
-
-# def poisson_zero_inflation_test(results: PoissonResults, alpha: float = 0.05) -> bool:
-#     """
-#     Significance test for zero-inflation in Poisson GLM.
-
-#     Parameters
-#     ----------
-#     results : PoissonResults
-#         Results of Poisson GLM.
-#     alpha : float
-#         Desired significance level.
-
-#     Returns
-#     -------
-#     bool
-#         True if zero-inflation is significant, False otherwise.
-
-#     References
-#     ---------
-#     [1] van den Broek, J.H. (1995). A score test for zero inflation in a Poisson distribution. Biometrics, 51 2, 738-43 . doi: 10.2307/2532940. PMID: 7786998.
-#     [2] Blasco-Moreno, A., Pérez-Casany, M., Puig, P., Morante, M.D., & Castells, E. (2019). What does a zero mean? Understanding false, random and structural zeros in ecology. Methods in Ecology and Evolution, 10, 949 - 959. doi: 10.1111/2041-210X.13175
-#     """
-
-#     # get variables
-#     exog, endog = results.model.exog, results.model.endog
-#     pred = results.predict()
-#     i0 = (endog == 0).astype(int)
-#     cov = np.asarray(exog)
-
-#     # compute test statistic
-#     e = np.exp(pred)
-#     f1 = np.sum(i0 * e - 1) ** 2
-#     f2 = np.sum(e - 1)
-#     f3 = (
-#         -np.reshape(pred, (1, -1))
-#         @ cov
-#         @ np.linalg.inv(cov.T @ np.diag(pred) @ cov)
-#         @ cov.T
-#         @ np.reshape(pred, (-1, 1))
-#     ).item()
-#     test_statistic = f1 / (f2 + f3)
-
-#     # compute p-value
-#     pvalue = chi2.sf(test_statistic, 1)
-#     return pvalue <= alpha
-
-
-# def fit_best_glm(
-#     endog: ArrayLike,
-#     exog: ArrayLike,
-#     exposure: ArrayLike = None,
-#     fit_intercept: bool = True,
-#     check_overdispersion: bool = False,
-#     check_zero_inflation: bool = False,
+# def get_single_trial_latencies(
+#     spikes: npt.ArrayLike,
+#     search_starts: npt.ArrayLike,
+#     search_ends: npt.ArrayLike,
+#     alignments: npt.ArrayLike | None = None,
+#     baseline_starts: npt.ArrayLike | None = None,
+#     baseline_ends: npt.ArrayLike | None = None,
+#     baseline_fr: float | list[float] | None = None,
+#     *,
 #     alpha: float = 0.05,
-# ) -> CountResults:
-#     """
-#     Fit the best discrete GLM for the given count data, acounting for overdispersion and zero-inflation.
+#     sorted: bool = True,
+#     unit_conversion: float = 1.0,
+# ) -> list[int]:
 
-#     Parameters
-#     ----------
-#     endog : array_like
-#         Endogenous variable.
-#     exog : array_like
-#         Exogenous variable.
-#     exposure : array_like
-#         Exposure variable.
-#     fit_intercept : bool
-#         Whether to fit an intercept.
-#     check_overdispersion : bool
-#         Whether to check for overdispersion.
-#     check_zero_inflation : bool
-#         Whether to check for zero-inflation.
-#     alpha : float
-#         Desired significance level for overdispersion and zero-inflation tests.
+#     # process inputs
+#     spikes = np.asarray(spikes) * unit_conversion
+#     if alignments is None:
+#         alignments = search_starts
 
-#     Returns
-#     -------
-#     results : "statsmodels.discrete.count_model.CountResults"
-#         Results of the best GLM.
-#     """
-#     if fit_intercept:
-#         exog = add_constant(exog)
-#     ele_cnt = exog.shape[1]
-
-#     results = Poisson(endog, exog, exposure=exposure).fit(
-#         method="bfgs", maxiter=5000, disp=0
-#     )
-#     overdispersed, zero_inflated = False, False
-#     if check_overdispersion:
-#         overdispersed = poisson_overdispersion_test(results, alpha=alpha)
-#     if check_zero_inflation:
-#         zero_inflated = poisson_zero_inflation_test(results, alpha=alpha)
-
-#     if overdispersed and zero_inflated:
-#         results = ZeroInflatedPoisson(endog, exog, exposure=exposure).fit(
-#             method="bfgs", maxiter=5000, disp=0
-#         )
-#         if zip_overdispersion_test(results, alpha=alpha):
-#             bounds = [(None, None)] * (ele_cnt + 1) + [(0, None)]
-#             results = ZeroInflatedNegativeBinomialP(endog, exog, exposure=exposure).fit(
-#                 method="lbfgs", maxiter=5000, disp=0, bounds=bounds
-#             )
-#     elif overdispersed:
-#         bounds = [(None, None)] * ele_cnt + [(0, None)]
-#         results = NegativeBinomialP(endog, exog, exposure=exposure).fit(
-#             method="lbfgs", maxiter=5000, disp=0, bounds=bounds
-#         )
-#     elif zero_inflated:
-#         results = ZeroInflatedPoisson(endog, exog, exposure=exposure).fit(
-#             method="bfgs", maxiter=5000, disp=0
-#         )
-#     return results
-
-
-# def _permutation_test_helper(results: CountResults) -> float:
-#     """
-#     Helper function for permutation test parallel computation.
-
-#     Parameters
-#     ----------
-#     results : CountResults
-#         Results of discrete GLM.
-
-#     Returns
-#     -------
-#     permute_pvalue : float
-#         The p-value associated with the permutation test.
-#     """
-#     exog, endog = results.model.exog, results.model.endog.copy()
-#     exposure = results.model.exposure
-#     ele_cnt = exog.shape[1]
-#     np.random.shuffle(endog)
-#     cls_name = results.model.__class__.__name__
-#     try:
-#         if cls_name == "Poisson":
-#             permute_results = Poisson(endog, exog, exposure=exposure).fit(
-#                 method="bfgs", maxiter=5000, disp=0
-#             )
-#         elif cls_name == "ZeroInflatedPoisson":
-#             permute_results = ZeroInflatedPoisson(endog, exog, exposure=exposure).fit(
-#                 method="bfgs", maxiter=5000, disp=0
-#             )
-#         elif cls_name == "NegativeBinomialP":
-#             bounds = [(None, None)] * ele_cnt + [(0, None)]
-#             permute_results = NegativeBinomialP(endog, exog, exposure=exposure).fit(
-#                 method="lbfgs", maxiter=5000, disp=0, bounds=bounds
-#             )
-#         elif cls_name == "ZeroInflatedNegativeBinomialP":
-#             bounds = [(None, None)] * (ele_cnt + 1) + [(0, None)]
-#             permute_results = ZeroInflatedNegativeBinomialP(
-#                 endog, exog, exposure=exposure
-#             ).fit(method="lbfgs", maxiter=5000, disp=0, bounds=bounds)
+#     # compute baseline firing rates if not provided
+#     if baseline_fr is None:
+#         if baseline_starts is None or baseline_ends is None:
+#             baseline_fr = len(spikes) / (spikes[-1] - spikes[0])
+#             baseline_fr = np.repeat(baseline_fr, len(search_starts))
 #         else:
-#             raise ValueError(f"Unknown model class: {cls_name}")
-#     except:  # hack for resolving singular matrix error
-#         return 0
-#     llr = permute_results.llr
-#     return llr if llr is not None else 0
+#             baseline_fr = compute_spike_rates(
+#                 spikes, baseline_starts, baseline_ends, sorted=sorted
+#             )
+#     elif not isinstance(baseline_fr, list):
+#         baseline_fr = [baseline_fr] * len(search_starts)
 
+#     # process trial spikes
+#     spikes = get_spikes(spikes, search_starts, search_ends, alignments, sorted=sorted)
+#     sig_activities = []
+#     for spike_train, ref_fr in zip(spikes, baseline_fr):
 
-# def llr_permutation_test(
-#     results: CountResults,
-#     alpha: float = 0.05,
-#     n_permute: int = 10000,
-#     chunksize: int = 1,
-# ) -> tuple[list[float], float]:
-#     """
-#     Compute the one-way permutation test for the likelihood ratio test statistic.
+#         # check if analysis is possible
+#         if len(spike_train) < 2:
+#             sig_activities.append([np.nan, np.nan])
+#             continue
 
-#     Parametersss
-#     ----------
-#     results : CountResults
-#         Results of discrete GLM.
-#     alpha : float
-#         Desired significance level.
-#     n_permute : int
-#         Number of permutations to perform for the permutation test.
-#     chunksize : int
-#         Size of chunks sent to worker processes.
+#         # define all search windows
+#         windows = np.array(
+#             [[x, y] for x, y in product(np.arange(spike_train), repeat=2) if x < y]
+#         )
+#         cnts = np.diff(windows, axis=1).ravel()
+#         isis = np.diff(spike_train[windows], axis=1).ravel()
 
-#     Returns
-#     -------
-#     null : list of float
-#         The null statistics from the permutation test.
-#     pvalue : float [0, 1]
-#         The p-value associated with the permutation test.
-#     """
+#         # check for significant activities
+#         pvals = test_poisson(cnts, isis, ref_fr, method="score").pvalue
+#         if not any(pvals < alpha):
+#             sig_activities.append([np.nan, np.nan])
+#         else:
+#             sig_activities.append(spike_train[windows[np.argmin(pvals)]])
 
-#     # check if permutation test is possible or necessary
-#     if not results.converged or not results.llr_pvalue or results.llr_pvalue > alpha:
-#         print("Permutation test: not possible or necessary.")
-#         return None, None
-
-#     # compute p-values
-#     null = process_map(
-#         _permutation_test_helper,
-#         [results] * n_permute,
-#         chunksize=chunksize,
-#         desc=f"Permutation Test",
-#     )
-#     pvalue = np.greater_equal(null, results.llr).mean()
-#     return null, pvalue
+#     return np.asarray(sig_activities)
 
 
 # def latency_analysis(

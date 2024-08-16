@@ -495,7 +495,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         group: str | None = None,
         *,
         n_conditions: int | None = None,
-        n_samples_per_cond: int | list[int] | None = None,
+        n_samples_per_cond: int | dict[Any, int] | None = None,
         random_seed: int | None = None,
     ) -> None:
 
@@ -503,6 +503,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         if not isinstance(condition, list):
             condition = [condition]
         u_conds = data[condition].drop_duplicates().values
+        self.n_init = data[unit].nunique()
 
         # process sample groups
         tmp_data, tmp_grp = [], []
@@ -516,13 +517,11 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
 
         # infer number of samples per condition if not provided
         if n_samples_per_cond is None:
-            n_samples_per_cond = [v.groupby(condition).size().min() for v in data]
+            n_samples_per_cond = [d.gropuby(condition).size().min() for d in data]
         elif isinstance(n_samples_per_cond, int):
             n_samples_per_cond = [n_samples_per_cond] * len(data)
-        elif len(n_samples_per_cond) != len(data):
-            raise ValueError(
-                "Number of samples per condition must be provided for each sample group."
-            )
+        else:
+            n_samples_per_cond = [n_samples_per_cond[k] for k in group]
         self.n_samples_per_cond = n_samples_per_cond
 
         # check random seed
@@ -531,7 +530,6 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         )
 
         # remove units missing conditional trials
-        self.n_inits = [v[unit].nunique() for v in data]
         data = [
             remove_groups_missing_conditions(
                 v,
@@ -542,7 +540,11 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
             )
             for v, nspc in zip(data, n_samples_per_cond)
         ]
-        self.n_valids = [v[unit].nunique() for v in data]
+        # align neurons across groups
+        ids = [v[unit].unique() for v in data]
+        ids = set.intersection(*map(set, ids))
+        data = [v[v[unit].isin(ids)] for v in data]
+        self.n_valid = len(ids)
 
         # define dichotomies
         dichots, dichot_names, dichot_diffs = make_balanced_dichotomies(
@@ -559,12 +561,54 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         self.condition = condition
         self.group = group
 
+    def score(
+        self,
+        n_resamples: int = 1,
+        *,
+        permute: bool = True,
+        n_splits: int | dict[Any, int] = 5,
+        n_repeats: int | dict[Any, int] = 1,
+        shuffle: bool | dict[Any, bool] = False,
+        clf: BaseEstimator = LinearSVC,
+        clf_kwargs: dict | None = None,
+        show_progress: bool = False,
+        return_clfs: bool = False,
+        n_jobs: int | None = None,
+    ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+
+        # process inputs
+        if isinstance(n_splits, int):
+            n_splits = [n_splits] * len(self.data)
+        else:
+            n_splits = [n_splits[k] for k in self.group]
+        if isinstance(n_repeats, int):
+            n_repeats = [n_repeats] * len(self.data)
+        else:
+            n_repeats = [n_repeats[k] for k in self.group]
+        if isinstance(shuffle, bool):
+            shuffle = [shuffle] * len(self.data)
+        else:
+            shuffle = [shuffle[k] for k in self.group]
+
+        return super().score(
+            n_resamples=n_resamples,
+            permute=permute,
+            n_splits=n_splits,
+            n_repeats=n_repeats,
+            shuffle=shuffle,
+            clf=clf,
+            clf_kwargs=clf_kwargs,
+            show_progress=show_progress,
+            return_clfs=return_clfs,
+            n_jobs=n_jobs,
+        )
+
     def _score_helper(
         self,
         i: int,
-        n_splits: None,
-        n_repeats: None,
-        shuffle: None,
+        n_splits: list[int],
+        n_repeats: list[int],
+        shuffle: list[bool],
         clf: BaseEstimator,
         clf_kwargs: dict | None,
         return_clfs: bool,
@@ -592,7 +636,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         # fit and validate each dichotomy
         res = []
         for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
-            for i, j in combinations(range(len(self.data)), 2):
+            for i, j in permutations(range(len(self.data)), 2):
                 if i == j:
                     continue
                 yi = isin_2d(conditions[i], dichot).astype(int)
@@ -604,6 +648,9 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                     yj,
                     conditions[i],
                     conditions[j],
+                    n_splits=n_splits[i],
+                    n_repeats=n_repeats[i],
+                    shuffle=shuffle[i],
                     clf=clf,
                     clf_kwargs=clf_kwargs,
                     return_clfs=return_clfs,
@@ -621,7 +668,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         res_perm = []
         Xs = [self.shuffle(X, condition, rs) for X, condition in zip(Xs, conditions)]
         for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
-            for i, j in combinations(range(len(self.data)), 2):
+            for i, j in permutations(range(len(self.data)), 2):
                 if i == j:
                     continue
                 yi = isin_2d(conditions[i], dichot).astype(int)
@@ -633,6 +680,9 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                     yj,
                     conditions[i],
                     conditions[j],
+                    n_splits=n_splits[i],
+                    n_repeats=n_repeats[i],
+                    shuffle=shuffle[i],
                     clf=clf,
                     clf_kwargs=clf_kwargs,
                     return_clfs=return_clfs,
@@ -656,6 +706,9 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         condition1: npt.ArrayLike | None = None,
         condition2: npt.ArrayLike | None = None,
         *,
+        n_splits: int = 5,
+        n_repeats: int = 1,
+        shuffle: bool = False,
         clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
@@ -844,6 +897,9 @@ class IndependentSamplesDecodability(_BaseIndependentSamplesGeneralizer):
         condition1: npt.ArrayLike | None = None,
         condition2: npt.ArrayLike | None = None,
         *,
+        n_splits: int = 5,
+        n_repeats: int = 1,
+        shuffle: bool = False,
         clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
@@ -854,13 +910,47 @@ class IndependentSamplesDecodability(_BaseIndependentSamplesGeneralizer):
         clf = clf(**clf_kwargs) if clf_kwargs else clf()
         clf = Pipeline([("scaler", StandardScaler()), ("clf", clf)])
 
-        # test generalization
-        clf.fit(X1, y1)
-        score = clf.score(X2, y2)
-        if return_clfs:
-            return {"scores": score, "clfs": clf.named_steps["clf"]}
-        else:
+        # check if cross-validation is possible
+        if n_splits == 1:
+            clf.fit(X1, y1)
+            score = clf.score(X2, y2)
+            if return_clfs:
+                return {"scores": score, "clfs": clf.named_steps["clf"]}
             return {"scores": score}
+
+        # determine which cross-validation strategy to use
+        if condition1 is None and n_repeats == 1:
+            cv = StratifiedKFold(
+                n_splits=n_splits,
+                shuffle=shuffle,
+                random_state=random_state if shuffle else None,
+            )
+        elif condition1 is None and n_repeats > 1:
+            cv = RepeatedStratifiedKFold(
+                n_splits=n_splits, n_repeats=n_repeats, random_state=random_state
+            )
+        elif condition1 is not None and n_repeats == 1:
+            cv = MultiStratifiedKFold(
+                n_splits=n_splits,
+                shuffle=shuffle,
+                random_state=random_state if shuffle else None,
+            )
+        else:
+            cv = RepeatedMultiStratifiedKFold(
+                n_splits=n_splits, n_repeats=n_repeats, random_state=random_state
+            )
+
+        # test generalization via cross-validation
+        scores, clfs = [], []
+        for sel_inds, _ in cv.split(X1, y1, groups=condition1):
+            clf.fit(X1[sel_inds], y1[sel_inds])
+            scores.append(clf.score(X2, y2))
+            if return_clfs:
+                clfs.append(clf.named_steps["clf"])
+        if return_clfs:
+            return {"scores": np.mean(scores), "clfs": clfs}
+        else:
+            return {"scores": np.mean(scores)}
 
 
 class CCGP(_BaseEstimator):

@@ -104,7 +104,7 @@ def compute_spike_rates(
     ends: npt.ArrayLike,
     *,
     sorted: bool = True,
-    unit_conversion: float = 1e3,
+    unit_conversion: float = 1.0,
 ) -> list[float]:
     """
     Compute the spike rates in trial time windows.
@@ -119,9 +119,8 @@ def compute_spike_rates(
         Array of end times for the trial windows.
     sorted : bool, default=True
         Whether the timings are sorted in ascending order.
-    unit_conversion : float, default=1e3
-        Conversion factor to convert spike counts to the desired.
-        By default, this converts from spikes per millisecond to spikes per second.
+    unit_conversion : float, default=1.0
+        Conversion factor to convert spike times to seconds.
 
     Returns
     -------
@@ -130,7 +129,7 @@ def compute_spike_rates(
     """
 
     counts = count_spikes(spikes, starts, ends, sorted=sorted)
-    durations = np.subtract(ends, starts)
-    spike_rates = [cnt / dur * unit_conversion for cnt, dur in zip(counts, durations)]
+    durations = np.subtract(ends, starts) * unit_conversion
+    spike_rates = [cnt / dur for cnt, dur in zip(counts, durations)]
 
     return spike_rates
