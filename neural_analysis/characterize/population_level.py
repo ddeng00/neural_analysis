@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from itertools import combinations, permutations, chain
+from itertools import combinations, permutations, chain, product
 from typing import Any
 
 import numpy as np
@@ -413,9 +413,7 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         res = []
         for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
             y = isin_2d(condition, dichot).astype(int)
-            for i, j in combinations(range(len(self.responses)), 2):
-                if i == j:
-                    continue
+            for i, j in product(range(len(self.responses)), repeat=2):
                 d_res = self.__class__.validate(
                     Xs[i],
                     Xs[j],
@@ -442,9 +440,7 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         Xs = self.shuffle(Xs, condition, rs)
         for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
             y = isin_2d(condition, dichot).astype(int)
-            for i, j in combinations(range(len(self.responses)), 2):
-                if i == j:
-                    continue
+            for i, j in product(range(len(self.responses)), repeat=2):
                 d_res = self.__class__.validate(
                     Xs[i],
                     Xs[j],
@@ -636,9 +632,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         # fit and validate each dichotomy
         res = []
         for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
-            for i, j in permutations(range(len(self.data)), 2):
-                if i == j:
-                    continue
+            for i, j in product(range(len(self.data)), repeat=2):
                 yi = isin_2d(conditions[i], dichot).astype(int)
                 yj = isin_2d(conditions[j], dichot).astype(int)
                 d_res = self.__class__.validate(
@@ -648,6 +642,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                     yj,
                     conditions[i],
                     conditions[j],
+                    same_group=(i == j),
                     n_splits=n_splits[i],
                     n_repeats=n_repeats[i],
                     shuffle=shuffle[i],
@@ -668,9 +663,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         res_perm = []
         Xs = [self.shuffle(X, condition, rs) for X, condition in zip(Xs, conditions)]
         for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
-            for i, j in permutations(range(len(self.data)), 2):
-                if i == j:
-                    continue
+            for i, j in product(range(len(self.data)), repeat=2):
                 yi = isin_2d(conditions[i], dichot).astype(int)
                 yj = isin_2d(conditions[j], dichot).astype(int)
                 d_res = self.__class__.validate(
@@ -680,6 +673,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                     yj,
                     conditions[i],
                     conditions[j],
+                    same_group=(i == j),
                     n_splits=n_splits[i],
                     n_repeats=n_repeats[i],
                     shuffle=shuffle[i],
@@ -706,6 +700,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         condition1: npt.ArrayLike | None = None,
         condition2: npt.ArrayLike | None = None,
         *,
+        same_group: bool = False,
         n_splits: int = 5,
         n_repeats: int = 1,
         shuffle: bool = False,
@@ -897,6 +892,7 @@ class IndependentSamplesDecodability(_BaseIndependentSamplesGeneralizer):
         condition1: npt.ArrayLike | None = None,
         condition2: npt.ArrayLike | None = None,
         *,
+        same_group: bool = False,
         n_splits: int = 5,
         n_repeats: int = 1,
         shuffle: bool = False,
@@ -942,9 +938,12 @@ class IndependentSamplesDecodability(_BaseIndependentSamplesGeneralizer):
 
         # test generalization via cross-validation
         scores, clfs = [], []
-        for sel_inds, _ in cv.split(X1, y1, groups=condition1):
-            clf.fit(X1[sel_inds], y1[sel_inds])
-            scores.append(clf.score(X2, y2))
+        for train_inds, test_inds in cv.split(X1, y1, groups=condition1):
+            clf.fit(X1[train_inds], y1[train_inds])
+            if same_group:
+                scores.append(clf.score(X1[test_inds], y1[test_inds]))
+            else:
+                scores.append(clf.score(X2, y2))
             if return_clfs:
                 clfs.append(clf.named_steps["clf"])
         if return_clfs:
