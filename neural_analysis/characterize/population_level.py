@@ -986,7 +986,9 @@ class CCGP(_BaseEstimator):
 
     @staticmethod
     def shuffle(X: npt.ArrayLike, condition: npt.ArrayLike, rs: np.random.RandomState):
-        return rotate_data_within_groups(X, condition, random_state=rs)
+        X = X.copy()
+        [rs.shuffle(Xi) for Xi in X]
+        return X
 
     @staticmethod
     def validate(
@@ -1060,36 +1062,33 @@ class CCGP(_BaseEstimator):
 
 
 class PS(_BaseEstimator):
-    """
-    Dichotomy-based estimator for parallelism score (PS) analyses.
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        unit: str,
+        response: str,
+        condition: str | list[str],
+        *,
+        n_conditions: int | None = None,
+        random_seed: int | None = None,
+    ) -> None:
 
-    Attributes
-    ----------
-    data : `pd.DataFrame`
-        DataFrame containing the data.
-    unit : str
-        Name of the column containing the unit identifiers.
-    response : str
-        Name of the column containing the response variable.
-    condition : str or list of str
-        Name of the column(s) containing the condition labels.
-    n_samples_per_cond : int
-        Number of samples per condition.
-    random_seed : int
-        Random seed used for all computations.
-    n_init : int
-        Number of units in the initial dataset.
-    n_valid : int
-        Number of units in the dataset after removing units with missing conditional trials.
-    dichotomies : list of tuple of array-like
-        List of dichotomies.
-    dichotomy_names : list of str
-        List of dichotomy names.
-    dichotomy_difficulties : list of float
-        List of dichotomy difficulties, operationalized as the proportion of adjacent condition pairs.
-    shuffle_fn : function
-        Function that rotates data such that unit responses are decorrelated across conditions.
-    """
+        super().__init__(
+            data,
+            unit,
+            response,
+            condition,
+            n_conditions=n_conditions,
+            n_samples_per_cond=1,
+            random_seed=random_seed,
+        )
+
+        # generate conditional averages
+        self.data = (
+            self.data.groupby([self.unit] + self.condition)[self.response]
+            .mean()
+            .reset_index()
+        )
 
     @staticmethod
     def shuffle(X: npt.ArrayLike, condition: npt.ArrayLike, rs: np.random.RandomState):
@@ -1100,14 +1099,7 @@ class PS(_BaseEstimator):
         X: npt.ArrayLike,
         y: npt.ArrayLike,
         condition: npt.ArrayLike,
-        *,
-        n_splits: None = None,
-        n_repeats: None = None,
-        shuffle: None = None,
-        clf: None = None,
-        clf_kwargs: None = None,
-        return_clfs: None = None,
-        random_state: None = None,
+        **kwargs,
     ):
         """
         Fit and validate a classifier.
@@ -1115,24 +1107,12 @@ class PS(_BaseEstimator):
         Parameters
         ----------
         X : array-like of shape (n_samples, n_features)
-            Feature matrix.
+            Conditional average matrix.
         y : array-like of shape (n_samples,)
             Target vector.
         condition : array-like of shape (n_samples,)
             Group labels for the samples used while splitting the dataset into train/test set.
-        n_splits : None
-            Ignored. Only present for compatibility with the base class.
-        n_repeats : None
-            Ignored. Only present for compatibility with the base class.
-        shuffle : None
-            Ignored. Only present for compatibility with the base class.
-        clf : None
-            Ignored. Only present for compatibility with the base class.
-        clf_kwargs : None
-            Ignored. Only present for compatibility with the base class.
-        return_clfs : None
-            Ignored. Only present for compatibility with the base class.
-        random_state : None
+        kwargs : dict
             Ignored. Only present for compatibility with the base class.
 
         Returns
@@ -1144,10 +1124,9 @@ class PS(_BaseEstimator):
 
         cv = LeaveNCrossingsOut()
         left_inds, right_inds = cv.get_group_indices(X, y, condition)
-
-        X_left = [np.mean(X[inds], axis=0) for inds in left_inds.values()]
-        X_right = [np.mean(X[inds], axis=0) for inds in right_inds.values()]
-        X_left, X_right = np.asarray(X_left), np.asarray(X_right)
+        left_inds = np.concatenate(list(left_inds.values()))
+        right_inds = np.concatenate(list(right_inds.values()))
+        X_left, X_right = X[left_inds], X[right_inds]
 
         best_score = -np.inf
         best_similarities = None
