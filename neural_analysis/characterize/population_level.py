@@ -105,6 +105,9 @@ class _BaseEstimator(ABC):
             n_conditions=n_conditions,
             n_samples_per_cond=n_samples_per_cond,
         )
+
+        # remove units with constant responses
+        data = data.groupby(unit).filter(lambda x: x[response].nunique() > 1)
         self.n_valid = data[unit].nunique()
 
         # define dichotomies
@@ -536,6 +539,10 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
             )
             for v, nspc in zip(data, n_samples_per_cond)
         ]
+
+        # remove units with constant responses
+        data = [v.groupby(unit).filter(lambda x: x[response].nunique() > 1) for v in data]
+
         # align neurons across groups
         ids = [v[unit].unique() for v in data]
         ids = set.intersection(*map(set, ids))
@@ -633,6 +640,8 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         res = []
         for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
             for i, j in product(range(len(self.data)), repeat=2):
+                if n_splits[i] == 0:
+                    continue
                 yi = isin_2d(conditions[i], dichot).astype(int)
                 yj = isin_2d(conditions[j], dichot).astype(int)
                 d_res = self.__class__.validate(
@@ -664,6 +673,8 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         Xs = [self.shuffle(X, condition, rs) for X, condition in zip(Xs, conditions)]
         for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
             for i, j in product(range(len(self.data)), repeat=2):
+                if n_splits[i] == 0:
+                    continue
                 yi = isin_2d(conditions[i], dichot).astype(int)
                 yj = isin_2d(conditions[j], dichot).astype(int)
                 d_res = self.__class__.validate(
@@ -1083,9 +1094,17 @@ class PS(_BaseEstimator):
             random_seed=random_seed,
         )
 
+        # normalize data
+        data = self.data.copy()
+        unit_mean = self.data.groupby(unit)[response].mean()
+        unit_std = self.data.groupby(unit)[response].std()
+        data[response] = (data[response] - data[unit].map(unit_mean)) / data[unit].map(
+            unit_std
+        )
+
         # generate conditional averages
         self.data = (
-            self.data.groupby([self.unit] + self.condition)[self.response]
+            data.groupby([unit] + condition)[response]
             .mean()
             .reset_index()
         )

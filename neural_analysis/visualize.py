@@ -11,6 +11,7 @@ from scipy.stats import sem
 from scipy.ndimage import gaussian_filter1d
 from statsmodels.stats.oneway import anova_oneway
 from sklearn.decomposition import PCA
+from sklearn.manifold import MDS
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from mayavi import mlab
@@ -669,14 +670,15 @@ def plot_projection(
     to_remove = unit_std[unit_std == 0].index
     data = data[~data[unit].isin(to_remove)]
 
-    # fit PCA via bootstrapping
-    pca = Pipeline([("scaler", StandardScaler()), ("pca", PCA(n_components=3))])
-    X_boot = data.groupby([unit] + condition).sample(n=1000, replace=True)
-    X_boot = np.column_stack(X_boot.groupby(unit)[response].apply(np.vstack))
-    X_boot = X_boot.astype(float)
-    pca = pca.fit(X_boot)
+    # normalize data
+    unit_mean = data.groupby(unit)[response].mean()
+    unit_std = data.groupby(unit)[response].std()
+    data[response] = (data[response] - data[unit].map(unit_mean)) / data[unit].map(
+        unit_std
+    )
 
     # aggregate population data and apply PCA transformation
+    pca = PCA(n_components=3)
     pop_mean = (
         data.groupby([unit] + condition)[response]
         .mean()
@@ -684,7 +686,7 @@ def plot_projection(
         .agg(list)
         .reset_index()
     )
-    X_mean = pca.transform(np.stack(pop_mean[response]))
+    X_mean = pca.fit_transform(np.stack(pop_mean[response]))
 
     # generate plotting styles
     y = pop_mean[condition].to_numpy(dtype=str)
@@ -779,7 +781,7 @@ def plot_projection(
     )
 
     # label axes
-    var_explained = pca.named_steps["pca"].explained_variance_ratio_ * 100
+    var_explained = pca.explained_variance_ratio_ * 100
     mlab.text3d(  # x-label
         (xmax + xmin) / 2 - (xmax - xmin) * 0.33,
         ymin - (ymax - ymin) * 0.04,
