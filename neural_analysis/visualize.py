@@ -450,6 +450,7 @@ def plot_metrics(
     marker: str = "o",
     chance: float | None = 0.5,
     ax: plt.Axes | None = None,
+    **kwargs,
 ):
 
     # Process parameters
@@ -479,6 +480,7 @@ def plot_metrics(
             lw=3,
             ax=ax,
             zorder=100,
+            **kwargs,
         )
 
     else:
@@ -515,6 +517,7 @@ def plot_metrics(
             lw=3,
             ax=ax,
             zorder=200,
+            **kwargs,
         )
 
     # Get plot limits

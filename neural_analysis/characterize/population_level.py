@@ -218,18 +218,14 @@ class _BaseEstimator(ABC):
             )
 
         # return results
-        to_explode = ["scores", "clfs"] if return_clfs else "scores"
         if not permute:
             results = pd.DataFrame.from_records(chain.from_iterable(results))
-            results = results.explode(to_explode, ignore_index=True)
             results = results.convert_dtypes()
             return results
         else:
             results, null_results = zip(*results)
             results = pd.DataFrame.from_records(chain.from_iterable(results))
-            results = results.explode(to_explode, ignore_index=True)
             null_results = pd.DataFrame.from_records(chain.from_iterable(null_results))
-            null_results = null_results.explode(to_explode, ignore_index=True)
             results, null_results = (
                 results.convert_dtypes(),
                 null_results.convert_dtypes(),
@@ -261,14 +257,14 @@ class _BaseEstimator(ABC):
             all_groups_complete=True,
             random_state=rs,
         )
+        ys = [isin_2d(condition, dichot).astype(int) for dichot in self.dichotomies]
 
         # fit and validate each dichotomy
         res = []
-        for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
-            y = isin_2d(condition, dichot).astype(int)
+        for i, dichot_name in enumerate(self.dichotomy_names):
             d_res = self.__class__.validate(
                 X,
-                y,
+                ys[i],
                 condition,
                 n_splits=n_splits,
                 n_repeats=n_repeats,
@@ -287,11 +283,10 @@ class _BaseEstimator(ABC):
         # estimate permutation null
         res_perm = []
         X = self.__class__.shuffle(X, condition, rs)
-        for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
-            y = isin_2d(condition, dichot).astype(int)
+        for i, dichot_name in enumerate(self.dichotomy_names):
             d_res = self.__class__.validate(
                 X,
-                y,
+                ys[i],
                 condition,
                 n_splits=n_splits,
                 n_repeats=n_repeats,
@@ -411,16 +406,16 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
             all_groups_complete=True,
             random_state=rs,
         )
+        ys = [isin_2d(condition, dichot).astype(int) for dichot in self.dichotomies]
 
         # fit and validate each dichotomy
         res = []
-        for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
-            y = isin_2d(condition, dichot).astype(int)
+        for k, dichot_name in enumerate(self.dichotomy_names):
             for i, j in product(range(len(self.responses)), repeat=2):
                 d_res = self.__class__.validate(
                     Xs[i],
                     Xs[j],
-                    y,
+                    ys[k],
                     condition,
                     n_splits=n_splits,
                     n_repeats=n_repeats,
@@ -441,13 +436,12 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         # estimate permutation null
         res_perm = []
         Xs = self.shuffle(Xs, condition, rs)
-        for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
-            y = isin_2d(condition, dichot).astype(int)
+        for k, dichot_name in enumerate(self.dichotomy_names):
             for i, j in product(range(len(self.responses)), repeat=2):
                 d_res = self.__class__.validate(
                     Xs[i],
                     Xs[j],
-                    y,
+                    ys[k],
                     condition,
                     n_splits=n_splits,
                     n_repeats=n_repeats,
@@ -541,7 +535,9 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         ]
 
         # remove units with constant responses
-        data = [v.groupby(unit).filter(lambda x: x[response].nunique() > 1) for v in data]
+        data = [
+            v.groupby(unit).filter(lambda x: x[response].nunique() > 1) for v in data
+        ]
 
         # align neurons across groups
         ids = [v[unit].unique() for v in data]
@@ -635,23 +631,25 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
             )
             Xs.append(X)
             conditions.append(condition)
+        ys = [
+            [isin_2d(condition, dichot).astype(int) for dichot in self.dichotomies]
+            for condition in conditions
+        ]
 
         # fit and validate each dichotomy
         res = []
-        for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
-            for i, j in product(range(len(self.data)), repeat=2):
-                if n_splits[i] == 0:
-                    continue
-                yi = isin_2d(conditions[i], dichot).astype(int)
-                yj = isin_2d(conditions[j], dichot).astype(int)
+        for i, j in product(range(len(self.data)), repeat=2):
+            if n_splits[i] == 0:
+                continue
+            for k, dichot_name in enumerate(self.dichotomy_names):
                 d_res = self.__class__.validate(
                     Xs[i],
                     Xs[j],
-                    yi,
-                    yj,
+                    ys[i][k],
+                    ys[j][k],
                     conditions[i],
                     conditions[j],
-                    same_group=(i == j),
+                    same_group=i == j,
                     n_splits=n_splits[i],
                     n_repeats=n_repeats[i],
                     shuffle=shuffle[i],
@@ -670,21 +668,29 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
 
         # estimate permutation null
         res_perm = []
-        Xs = [self.shuffle(X, condition, rs) for X, condition in zip(Xs, conditions)]
-        for dichot, dichot_name in zip(self.dichotomies, self.dichotomy_names):
-            for i, j in product(range(len(self.data)), repeat=2):
-                if n_splits[i] == 0:
-                    continue
-                yi = isin_2d(conditions[i], dichot).astype(int)
-                yj = isin_2d(conditions[j], dichot).astype(int)
+        for i, j in product(range(len(self.data)), repeat=2):
+            if n_splits[i] == 0:
+                continue
+
+            # pool data and shuffle
+            if i == j:
+                Xi = Xj = self.shuffle(Xs[i], conditions[i], rs)
+            else:
+                X_ij = np.vstack([Xs[i], Xs[j]])
+                c_ij = np.vstack([conditions[i], conditions[j]])
+                X_ij = self.shuffle(X_ij, c_ij, rs)
+                Xi = X_ij[: len(Xs[i])]
+                Xj = X_ij[len(Xs[i]) :]
+
+            for k, dichot_name in enumerate(self.dichotomy_names):
                 d_res = self.__class__.validate(
-                    Xs[i],
-                    Xs[j],
-                    yi,
-                    yj,
+                    Xi,
+                    Xj,
+                    ys[i][k],
+                    ys[j][k],
                     conditions[i],
                     conditions[j],
-                    same_group=(i == j),
+                    same_group=i == j,
                     n_splits=n_splits[i],
                     n_repeats=n_repeats[i],
                     shuffle=shuffle[i],
@@ -1103,11 +1109,7 @@ class PS(_BaseEstimator):
         )
 
         # generate conditional averages
-        self.data = (
-            data.groupby([unit] + condition)[response]
-            .mean()
-            .reset_index()
-        )
+        self.data = data.groupby([unit] + condition)[response].mean().reset_index()
 
     @staticmethod
     def shuffle(X: npt.ArrayLike, condition: npt.ArrayLike, rs: np.random.RandomState):
