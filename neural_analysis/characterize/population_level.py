@@ -105,9 +105,6 @@ class _BaseEstimator(ABC):
             n_conditions=n_conditions,
             n_samples_per_cond=n_samples_per_cond,
         )
-
-        # remove units with constant responses
-        data = data.groupby(unit).filter(lambda x: x[response].nunique() > 1)
         self.n_valid = data[unit].nunique()
 
         # define dichotomies
@@ -532,11 +529,6 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                 n_samples_per_cond=nspc,
             )
             for v, nspc in zip(data, n_samples_per_cond)
-        ]
-
-        # remove units with constant responses
-        data = [
-            v.groupby(unit).filter(lambda x: x[response].nunique() > 1) for v in data
         ]
 
         # align neurons across groups
@@ -1078,6 +1070,82 @@ class CCGP(_BaseEstimator):
             return {"scores": np.mean(results["test_score"])}
 
 
+class IndependentSamplesCCGP(_BaseIndependentSamplesGeneralizer):
+
+    @staticmethod
+    def shuffle(
+        X: npt.ArrayLike, condition: npt.ArrayLike, rs: np.random.RandomState
+    ) -> npt.ArrayLike:
+        return rotate_data_within_groups(X, condition, random_state=rs)
+
+    @staticmethod
+    def validate(
+        X1: npt.ArrayLike,
+        X2: npt.ArrayLike,
+        y1: npt.ArrayLike,
+        y2: npt.ArrayLike,
+        condition1: npt.ArrayLike | None = None,
+        condition2: npt.ArrayLike | None = None,
+        *,
+        same_group: bool = False,
+        n_splits: None = None,
+        n_repeats: None = None,
+        shuffle: None = None,
+        clf: BaseEstimator = LinearSVC,
+        clf_kwargs: dict | None = None,
+        return_clfs: bool = False,
+        random_state: int | np.random.RandomState | None = None,
+    ) -> dict[str, Any]:
+
+        # initialize classifier
+        clf = clf(**clf_kwargs) if clf_kwargs else clf()
+        clf = Pipeline([("scaler", StandardScaler()), ("clf", clf)])
+        cv = LeaveNCrossingsOut()
+
+        # perform cross-validation (same group)
+        if same_group:
+            results = cross_validate(
+                clf,
+                X1,
+                y1,
+                groups=condition1,
+                cv=cv,
+                return_estimator=return_clfs,
+                error_score="raise",
+            )
+            if return_clfs:
+                return {
+                    "scores": np.mean(results["test_score"]),
+                    "clfs": [clf.named_steps["clf"] for clf in results["estimator"]],
+                }
+            else:
+                return {"scores": np.mean(results["test_score"])}
+
+        # perform cross-validation (different groups)
+        scores, clfs = [], []
+        left_inds_1, right_inds_1 = cv.get_group_indices(X1, y1, condition1)
+        left_inds_2, right_inds_2 = cv.get_group_indices(X2, y2, condition2)
+        for test_k1, test_v1 in left_inds_1.items():
+            for test_k2, test_v2 in right_inds_1.items():
+                test_inds = np.concatenate([test_v1, test_v2])
+                X_test = X1[test_inds]
+                y_test = y1[test_inds]
+
+                exclude_inds = np.concatenate(
+                    [left_inds_2[test_k1], right_inds_2[test_k2]]
+                )
+                X_train = np.delete(X2, exclude_inds, axis=0)
+                y_train = np.delete(y2, exclude_inds)
+
+                scores.append(clf.fit(X_train, y_train).score(X_test, y_test))
+                if return_clfs:
+                    clfs.append(clf.named_steps["clf"].copy())
+        if return_clfs:
+            return {"scores": np.mean(scores), "clfs": clfs}
+        else:
+            return {"scores": np.mean(scores)}
+
+
 class PS(_BaseEstimator):
     def __init__(
         self,
@@ -1087,6 +1155,7 @@ class PS(_BaseEstimator):
         condition: str | list[str],
         *,
         n_conditions: int | None = None,
+        n_samples_per_cond: None = None,
         random_seed: int | None = None,
     ) -> None:
 

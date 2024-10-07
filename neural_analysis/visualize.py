@@ -4,6 +4,7 @@ from itertools import combinations
 import numpy as np
 import pandas as pd
 import numpy.typing as npt
+import matplotlib as mpl
 from matplotlib import colormaps
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -449,6 +450,7 @@ def plot_metrics(
     sig_test: bool = False,
     marker: str = "o",
     chance: float | None = 0.5,
+    palette: str | npt.ArrayLike | dict | mpl.colors.Colormap = "tab10",
     ax: plt.Axes | None = None,
     **kwargs,
 ):
@@ -478,6 +480,7 @@ def plot_metrics(
             markersize=10,
             markeredgecolor="black",
             lw=3,
+            palette=palette,
             ax=ax,
             zorder=100,
             **kwargs,
@@ -515,6 +518,7 @@ def plot_metrics(
             markersize=10,
             markeredgecolor="black",
             lw=3,
+            palette=palette,
             ax=ax,
             zorder=200,
             **kwargs,
@@ -544,6 +548,8 @@ def plot_metrics(
             labeled = False
             null = null.groupby(x_group)[metric].quantile([0.05, 0.95]).unstack()
             for grp, (low, high) in null.iterrows():
+                if grp not in x_order:
+                    continue
                 grp = list(x_order).index(grp)
                 ax.fill_between(
                     [grp - 0.25, grp + 0.25],
@@ -581,7 +587,7 @@ def plot_metrics(
                     zorder=300,
                 )
         else:
-            cmap = sns.color_palette("tab10", len(y_order))
+            cmap = sns.color_palette(palette, len(y_order))
             to_plot = []
             for i, y in enumerate(y_order):
                 df = data[data[y_group] == y]
@@ -715,7 +721,7 @@ def plot_projection(
     max_val = max(xmax - xmin, ymax - ymin, zmax - zmin)
 
     # plot edges
-    tube_radius = 0.02 * max_val
+    tube_radius = 0.015 * max_val
     if len(condition) > 1:
         edge_sets = defaultdict(list)
         for i, j in combinations(range(len(y)), 2):
@@ -730,7 +736,8 @@ def plot_projection(
                     color=(1, 1, 1),
                     opacity=0.25,
                 )
-            elif li[0] == lj[0] and np.sum(li[1:] == lj[1:]) == 1:
+            # elif li[0] == lj[0] and np.sum(li[1:] == lj[1:]) == 1:
+            elif li[0] == lj[0]:
                 edge_sets[li[0]].extend([Xi, Xj])
                 mlab.plot3d(
                     [Xi[0], Xj[0]],
@@ -739,6 +746,19 @@ def plot_projection(
                     tube_radius=tube_radius,
                     color=colors_lv1[li[0]][0:3],
                 )
+    else:
+        edge_sets = defaultdict(list)
+        for i, j in combinations(range(len(y)), 2):
+            li, lj = y[i], y[j]
+            Xi, Xj = X_mean[i], X_mean[j]
+            mlab.plot3d(
+                [Xi[0], Xj[0]],
+                [Xi[1], Xj[1]],
+                [Xi[2], Xj[2]],
+                tube_radius=tube_radius / 2,
+                color=(1, 1, 1),
+                opacity=0.25,
+            )
 
     # plot faces
     if len(condition) > 2:
@@ -760,67 +780,42 @@ def plot_projection(
         xx, yy, zz = X_mean[i]
         mlab.points3d(xx, yy, zz, color=colors_all[i][0:3], scale_factor=point_radius)
 
-    # add coordinate axes
-    mlab.plot3d(
-        [xmin, xmax],
-        [ymin, ymin],
-        [zmax, zmax],
-        tube_radius=0.005 * max_val,
-        color=(0, 0, 0),
-    )
-    mlab.plot3d(
-        [xmin, xmin],
-        [ymin, ymax],
-        [zmax, zmax],
-        tube_radius=0.005 * max_val,
-        color=(0, 0, 0),
-    )
-    mlab.plot3d(
-        [xmin, xmin],
-        [ymin, ymin],
-        [zmin, zmax],
-        tube_radius=0.005 * max_val,
-        color=(0, 0, 0),
-    )
-
-    # label axes
-    var_explained = pca.explained_variance_ratio_ * 100
-    mlab.text3d(  # x-label
-        (xmax + xmin) / 2 - (xmax - xmin) * 0.33,
-        ymin - (ymax - ymin) * 0.04,
-        zmax + (zmax - zmin) * 0.05,
-        f"PC1\n({var_explained[0]:.1f}%)",
-        scale=0.025 * max_val,
-        color=(1, 1, 1),
-    )
-    mlab.text3d(  # y-label
-        xmin - (xmax - xmin) * 0.1,
-        (ymax + ymin) / 2 - (ymax - ymin) * 0.33,
-        zmax + (zmax - zmin) * 0.05,
-        f"PC2\n({var_explained[1]:.1f}%)",
-        scale=0.025 * max_val,
-        color=(1, 1, 1),
-    )
-    mlab.text3d(  # z-label
-        xmin - (xmax - xmin) * 0.1,
-        ymin - (ymax - ymin) * 0.04,
-        zmax,
-        f"PC3\n({var_explained[2]:.1f}%)",
-        scale=0.025 * max_val,
-        color=(1, 1, 1),
-    )
-
-    # set viewpoint
-    mlab.view(azimuth=0, elevation=0, distance="auto", focalpoint="auto")
-    fig.scene._lift()
-
     # convert to image for Matplotlib
-    img = mlab.screenshot(figure=fig, mode="rgb", antialiased=True)
-    img = img[150:-150, 150:-150]
+    mlab.view(distance="auto", focalpoint="auto")
+    fig.scene._lift()
+    img = mlab.screenshot(figure=fig, mode="rgba", antialiased=True)
+    img = img[100:-100, 100:-100]
     if interactive:
         mlab.show()
     else:
         mlab.close()
+
+    # hack to get coordiante axes
+    fig = mlab.figure(size=(2000, 2000))
+    var_explained = pca.explained_variance_ratio_ * 100
+    mlab.points3d(0, 0, 0, color=(1, 1, 1), opacity=0, scale_factor=0.1 * max_val)
+    mlab.orientation_axes(
+        xlabel=f"PC1\n({var_explained[0]:.1f}%)",
+        ylabel=f"PC2\n({var_explained[1]:.1f}%)",
+        zlabel=f"PC3\n({var_explained[2]:.1f}%)",
+    )
+    fig.scene._lift()
+    img2 = mlab.screenshot(figure=fig, mode="rgba", antialiased=True)[
+        -300:-120, 110:320
+    ]
+    mlab.close()
+
+    # process screenshot
+    match_inds = np.where(img2[:, :, 3] > 0)
+    img[*match_inds] = img2[match_inds]
+    bg = np.full_like(img, (0.35, 0.35, 0.35, 1))
+    alpha_out = img[:, :, 3] + bg[:, :, 3] * (1 - img[:, :, 3])
+    img = (
+        img * img[:, :, 3:4] + bg * bg[:, :, 3:4] * (1 - img[:, :, 3:4])
+    ) / alpha_out[:, :, None]
+    img[:, :, 3] = alpha_out
+
+    # plot projection screenshot
     ax.imshow(img)
     ax.axis("off")
 
