@@ -105,6 +105,9 @@ class _BaseEstimator(ABC):
             n_conditions=n_conditions,
             n_samples_per_cond=n_samples_per_cond,
         )
+
+        # remove units with constant responses
+        data = data.groupby(unit).filter(lambda x: x[response].nunique() > 1)
         self.n_valid = data[unit].nunique()
 
         # define dichotomies
@@ -529,6 +532,11 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                 n_samples_per_cond=nspc,
             )
             for v, nspc in zip(data, n_samples_per_cond)
+        ]
+
+        # remove units with constant responses
+        data = [
+            v.groupby(unit).filter(lambda x: x[response].nunique() > 1) for v in data
         ]
 
         # align neurons across groups
@@ -1219,13 +1227,11 @@ class PS(_BaseEstimator):
         X_left, X_right = X[left_inds], X[right_inds]
 
         best_score = -np.inf
-        best_similarities = None
         for right_xs_perm in permutations(X_right):
             vecs = np.array(right_xs_perm) - X_left
             curr_sims = [1 - cosine(v1, v2) for v1, v2 in combinations(vecs, 2)]
             curr_score = np.mean(curr_sims)
             if curr_score > best_score:
                 best_score = curr_score
-                best_similarities = curr_sims
 
-        return {"scores": best_similarities}
+        return {"scores": best_score}
