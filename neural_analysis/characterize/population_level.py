@@ -106,8 +106,8 @@ class _BaseEstimator(ABC):
             n_samples_per_cond=n_samples_per_cond,
         )
 
-        # remove units with constant responses
-        data = data.groupby(unit).filter(lambda x: x[response].nunique() > 1)
+        # # remove units with constant responses
+        # data = data.groupby(unit).filter(lambda x: x[response].nunique() > 1)
         self.n_valid = data[unit].nunique()
 
         # define dichotomies
@@ -534,10 +534,10 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
             for v, nspc in zip(data, n_samples_per_cond)
         ]
 
-        # remove units with constant responses
-        data = [
-            v.groupby(unit).filter(lambda x: x[response].nunique() > 1) for v in data
-        ]
+        # # remove units with constant responses
+        # data = [
+        #     v.groupby(unit).filter(lambda x: x[response].nunique() > 1) for v in data
+        # ]
 
         # align neurons across groups
         ids = [v[unit].unique() for v in data]
@@ -1177,10 +1177,14 @@ class PS(_BaseEstimator):
             random_seed=random_seed,
         )
 
-        # normalize data
+        # remove units with constant responses
         data = self.data.copy()
-        unit_mean = self.data.groupby(unit)[response].mean()
-        unit_std = self.data.groupby(unit)[response].std()
+        data = data.groupby(unit).filter(lambda x: x[response].nunique() > 1)
+        self.n_valid = data[unit].nunique()
+
+        # normalize data
+        unit_mean = data.groupby(unit)[response].mean()
+        unit_std = data.groupby(unit)[response].std()
         data[response] = (data[response] - data[unit].map(unit_mean)) / data[unit].map(
             unit_std
         )
