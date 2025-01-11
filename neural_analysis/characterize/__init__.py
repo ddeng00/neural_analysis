@@ -1,4 +1,4 @@
-from .population_level import (
+from .population import (
     Decodability,
     RelatedSamplesDecodability,
     IndependentSamplesDecodability,
@@ -6,4 +6,4 @@ from .population_level import (
     IndependentSamplesCCGP,
     PS,
 )
-from .single_unit_level import perform_anova
+from .single_unit import perform_anova
