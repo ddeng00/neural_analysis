@@ -23,7 +23,7 @@ from ..validate import (
     rotate_data_within_groups,
 )
 
-from _base import (
+from ._base import (
     _BaseEstimator,
     _BaseRelatedSamplesGeneralizer,
     _BaseIndependentSamplesGeneralizer,
@@ -256,36 +256,37 @@ class IndependentSamplesDecodability(_BaseIndependentSamplesGeneralizer):
 
         # test generalization via cross-validation
         scores, clfs = [], []
-        if same_group:
-            for train_inds, test_inds in cv.split(X1, y1, groups=condition1):
-                clf.fit(X1[train_inds], y1[train_inds])
-                scores.append(clf.score(X1[test_inds], y1[test_inds]))
-                if return_clfs:
-                    clfs.append(clf.named_steps["clf"])
-        else:
-            for train_inds, _ in cv.split(X1, y1, groups=condition1):
-                clf.fit(X1[train_inds], y1[train_inds])
-                for _, test_inds in cv.split(X2, y2, groups=condition2):
-                    scores.append(clf.score(X2[test_inds], y2[test_inds]))
-                    if return_clfs:
-                        clfs.append(clf.named_steps["clf"])
-        if return_clfs:
-            return {"scores": np.mean(scores), "clfs": clfs}
-        else:
-            return {"scores": np.mean(scores)}
-
-        # for train_inds, test_inds in cv.split(X1, y1, groups=condition1):
-        #     clf.fit(X1[train_inds], y1[train_inds])
-        #     if same_group:
+        
+        # if same_group:
+        #     for train_inds, test_inds in cv.split(X1, y1, groups=condition1):
+        #         clf.fit(X1[train_inds], y1[train_inds])
         #         scores.append(clf.score(X1[test_inds], y1[test_inds]))
-        #     else:
-        #         scores.append(clf.score(X2, y2))
-        #     if return_clfs:
-        #         clfs.append(clf.named_steps["clf"])
+        #         if return_clfs:
+        #             clfs.append(clf.named_steps["clf"])
+        # else:
+        #     for train_inds, _ in cv.split(X1, y1, groups=condition1):
+        #         clf.fit(X1[train_inds], y1[train_inds])
+        #         for _, test_inds in cv.split(X2, y2, groups=condition2):
+        #             scores.append(clf.score(X2[test_inds], y2[test_inds]))
+        #             if return_clfs:
+        #                 clfs.append(clf.named_steps["clf"])
         # if return_clfs:
         #     return {"scores": np.mean(scores), "clfs": clfs}
         # else:
         #     return {"scores": np.mean(scores)}
+
+        for train_inds, test_inds in cv.split(X1, y1, groups=condition1):
+            clf.fit(X1[train_inds], y1[train_inds])
+            if same_group:
+                scores.append(clf.score(X1[test_inds], y1[test_inds]))
+            else:
+                scores.append(clf.score(X2, y2))
+            if return_clfs:
+                clfs.append(clf.named_steps["clf"])
+        if return_clfs:
+            return {"scores": np.mean(scores), "clfs": clfs}
+        else:
+            return {"scores": np.mean(scores)}
 
 
 class CCGP(_BaseEstimator):
@@ -503,14 +504,15 @@ class PS(_BaseEstimator):
         )
 
         # normalize data
-        unit_mean = data.groupby(unit)[response].mean()
-        unit_std = data.groupby(unit)[response].std()
-        data[response] = (data[response] - data[unit].map(unit_mean)) / data[unit].map(
-            unit_std
-        )
+        self.data = self.data.copy()
+        unit_mean = self.data.groupby(unit)[response].mean()
+        unit_std = self.data.groupby(unit)[response].std()
+        self.data[response] = (
+            self.data[response] - self.data[unit].map(unit_mean)
+        ) / self.data[unit].map(unit_std)
 
         # generate conditional averages
-        self.data = data.groupby([unit] + condition)[response].mean().reset_index()
+        self.data = self.data.groupby([unit] + condition)[response].mean().reset_index()
 
     @staticmethod
     def shuffle(X: npt.ArrayLike, condition: npt.ArrayLike, rs: np.random.RandomState):

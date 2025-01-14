@@ -447,14 +447,14 @@ def plot_spikes_with_PSTH(
 
 def plot_metrics(
     data: pd.DataFrame,
-    metric: str,
+    metric: str = "scores",
     *,
     null: pd.DataFrame | None = None,
     x_group: str | None = None,
     y_group: str | None = None,
-    x_order: npt.ArrayLike | None = None,
-    y_order: npt.ArrayLike | None = None,
-    y_emph: npt.ArrayLike | None = None,
+    x_order: list[str] | None = None,
+    y_order: list[str] | None = None,
+    y_emph: str | list[str] | None = None,
     sig_test: bool = False,
     marker: str = "o",
     chance: float | None = 0.5,
@@ -495,6 +495,8 @@ def plot_metrics(
         )
 
     else:
+        if isinstance(y_emph, str):
+            y_emph = data.loc[data[y_emph], y_group].unique()
         y_order = [y for y in y_order if y in y_emph]
         y_emph = np.isin(data[y_group], y_emph)
         sns.pointplot(
