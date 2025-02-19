@@ -22,6 +22,59 @@ from .preprocess import remove_groups_missing_conditions
 from .statistics import compute_confidence_interval
 
 
+def plot_dropout(
+    data: pd.DataFrame,
+    unit: str,
+    condition: str | list[str],
+    group: str | list[str] | None = None,
+    n_conditions: int | None = None,
+    normalize: bool = False,
+    ax: plt.Axes | None = None,
+) -> plt.Axes:
+
+    # Create a new figure if no Axes object is provided
+    if ax is None:
+        _, ax = plt.subplots()
+
+    # process inputs
+    if not isinstance(condition, list):
+        condition = [condition]
+
+    for grp, df in data.groupby(group):
+        # infer the number of conditional groups if not provided
+        if n_conditions is None:
+            n_conditions = df.groupby(condition).ngroups
+
+        # get min. trial count per condition
+        n_trials = (
+            df.groupby(unit)[condition].value_counts().groupby(unit).min().to_dict()
+        )
+
+        # check for missing conditional groups
+        for uid, df in df.groupby(unit):
+            if df.groupby(condition).ngroups < n_conditions:
+                n_trials[uid] = 0
+
+        # plot dropout curve
+        n_trials = np.array(list(n_trials.values()))
+        thresholds = np.arange(max(n_trials) + 1)
+        n_remaining = np.array([np.sum(n_trials >= t) for t in thresholds])
+        if normalize:
+            n_remaining = n_remaining / len(n_trials) * 100
+        ax.plot(thresholds, n_remaining, lw=2, label=grp)
+
+    # misc. settings
+    if group is not None:
+        ax.legend(frameon=False)
+    ax.set(
+        xlabel="Min. Trials per Condition",
+        ylabel="Units Remaining (%)" if normalize else "Units Remaining",
+    )
+    sns.despine(ax=ax)
+
+    return ax
+
+
 def remove_duplicate_legend_entries(ax: plt.Axes | None = None) -> plt.Axes:
     """
     Remove duplicate entries from a figure legend.
@@ -295,6 +348,7 @@ def plot_PSTH(
     if group_labels is not None and sig_test:
         y_max = ax.get_ylim()[1]
         spike_rates = np.sqrt(spike_rates).T
+        spike_rates += np.random.normal(0, 1e-6, spike_rates.shape)
         pvals = np.array(
             [anova_oneway(rate, group_labels).pvalue for rate in spike_rates]
         )

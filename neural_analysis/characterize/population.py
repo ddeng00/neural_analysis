@@ -256,7 +256,7 @@ class IndependentSamplesDecodability(_BaseIndependentSamplesGeneralizer):
 
         # test generalization via cross-validation
         scores, clfs = [], []
-        
+
         # if same_group:
         #     for train_inds, test_inds in cv.split(X1, y1, groups=condition1):
         #         clf.fit(X1[train_inds], y1[train_inds])

@@ -55,6 +55,7 @@ class _BaseEstimator(ABC):
         n_conditions: int | None = None,
         n_samples_per_cond: int | None = None,
         dichot_map: dict[str, Any] | None = None,
+        named_only: bool = False,
         verbose: bool = False,
         remove_const: bool = False,
         random_seed: int | None = None,
@@ -79,6 +80,11 @@ class _BaseEstimator(ABC):
         # process conditions
         if not isinstance(condition, list):
             condition = [condition]
+        if not isinstance(response, list):
+            response = [response]
+
+        # remove irrelevant columns
+        data = data[[unit] + response + condition]
 
         # infer number of samples per condition if not provided
         if n_samples_per_cond is None:
@@ -102,7 +108,8 @@ class _BaseEstimator(ABC):
 
         # remove units with constant responses
         if remove_const:
-            data = data.groupby(unit).filter(lambda x: x[response].nunique() > 1)
+            for res in response:
+                data = data.groupby(unit).filter(lambda x: x[res].nunique() > 1)
         self.n_valid = data[unit].nunique()
 
         # print results
@@ -128,10 +135,23 @@ class _BaseEstimator(ABC):
                         self.dichotomy_names[i] = dichot_name
                         break
 
+        # remove irrelevant dichotomies
+        if named_only:
+            sel_inds = [
+                i
+                for i, name in enumerate(self.dichotomy_names)
+                if "unnamed_" not in name
+            ]
+            self.dichotomies = [self.dichotomies[i] for i in sel_inds]
+            self.dichotomy_names = [self.dichotomy_names[i] for i in sel_inds]
+            self.dichotomy_difficulties = [
+                self.dichotomy_difficulties[i] for i in sel_inds
+            ]
+
         # store data
         self.data = data
         self.unit = unit
-        self.response = response
+        self.response = response if len(response) > 1 else response[0]
         self.condition = condition
 
     @staticmethod
@@ -398,6 +418,7 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         n_conditions: int | None = None,
         n_samples_per_cond: int | None = None,
         dichot_map: dict[str, Any] | None = None,
+        named_only: bool = False,
         verbose: bool = False,
         remove_const: bool = False,
         random_seed: int | None = None,
@@ -422,7 +443,6 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         # check if generalization is possible
         if len(responses) < 2:
             raise ValueError("At least two responses are required for generalization.")
-        self.responses = responses
         super().__init__(
             data,
             unit,
@@ -431,11 +451,11 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
             n_conditions=n_conditions,
             n_samples_per_cond=n_samples_per_cond,
             dichot_map=dichot_map,
+            named_only=named_only,
             verbose=verbose,
             remove_const=remove_const,
             random_seed=random_seed,
         )
-        del self.response
 
     def _score_helper(
         self,
@@ -456,7 +476,7 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         Xs, condition = construct_pseudopopulation(
             self.data,
             self.unit,
-            self.responses,
+            self.response,
             self.condition,
             n_samples_per_cond=self.n_samples_per_cond,
             all_groups_complete=True,
@@ -467,7 +487,7 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         # fit and validate each dichotomy
         res = []
         for k, dichot_name in enumerate(self.dichotomy_names):
-            for i, j in product(range(len(self.responses)), repeat=2):
+            for i, j in product(range(len(self.response)), repeat=2):
                 d_res = self.__class__.validate(
                     Xs[i],
                     Xs[j],
@@ -483,8 +503,8 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
                 )
                 d_res["dichotomy"] = dichot_name
                 d_res["named"] = "unnamed" not in dichot_name
-                d_res["train"] = self.responses[i]
-                d_res["test"] = self.responses[j]
+                d_res["train"] = self.response[i]
+                d_res["test"] = self.response[j]
                 res.append(d_res)
         if not permute:
             return res
@@ -493,7 +513,7 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         res_perm = []
         Xs = self.shuffle(Xs, condition, rs)
         for k, dichot_name in enumerate(self.dichotomy_names):
-            for i, j in product(range(len(self.responses)), repeat=2):
+            for i, j in product(range(len(self.response)), repeat=2):
                 d_res = self.__class__.validate(
                     Xs[i],
                     Xs[j],
@@ -509,8 +529,8 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
                 )
                 d_res["dichotomy"] = dichot_name
                 d_res["named"] = "unnamed" not in dichot_name
-                d_res["train"] = self.responses[i]
-                d_res["test"] = self.responses[j]
+                d_res["train"] = self.response[i]
+                d_res["test"] = self.response[j]
                 res_perm.append(d_res)
 
         return res, res_perm
@@ -577,6 +597,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         n_conditions: int | None = None,
         n_samples_per_cond: int | dict[Any, int] | None = None,
         dichot_map: dict[str, Any] | None = None,
+        named_only: bool = False,
         verbose: bool = False,
         remove_const: bool = False,
         random_seed: int | None = None,
@@ -674,6 +695,19 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                     if all(isin_2d(d, dichot)) or not any(isin_2d(d, dichot)):
                         self.dichotomy_names[i] = dichot_name
                         break
+
+        # remove irrelevant dichotomies
+        if named_only:
+            sel_inds = [
+                i
+                for i, name in enumerate(self.dichotomy_names)
+                if "unnamed" not in name
+            ]
+            self.dichotomies = [self.dichotomies[i] for i in sel_inds]
+            self.dichotomy_names = [self.dichotomy_names[i] for i in sel_inds]
+            self.dichotomy_difficulties = [
+                self.dichotomy_difficulties[i] for i in sel_inds
+            ]
 
         # store data
         self.data = data
