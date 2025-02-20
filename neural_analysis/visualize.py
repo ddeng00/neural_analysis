@@ -1025,7 +1025,7 @@ def plot_dendrogram(
 
     # create figure if not provided
     if ax is None:
-        fig, ax = plt.subplots(figsize=(6, 6))
+        fig, ax = plt.subplots(figsize=(8, 8))
 
     # process data
     data = remove_groups_missing_conditions(data, unit, condition)
@@ -1068,7 +1068,7 @@ def plot_dendrogram(
     linkage_matrix = np.column_stack([model.children_, model.distances_, counts])
 
     # plot dendrogram
-    dendrogram(linkage_matrix, orientation="left", ax=ax)
+    dendrogram(linkage_matrix, orientation="right", ax=ax)
     sns.despine(ax=ax)
     ax.set_xlabel("Euclidean Distance")
     labels = np.array([item.get_text() for item in ax.get_yticklabels()], dtype=int)
