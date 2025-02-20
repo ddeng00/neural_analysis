@@ -1020,6 +1020,7 @@ def plot_dendrogram(
     # check inputs
     if isinstance(condition, str):
         condition = [condition]
+    n_conds = len(condition)
     cmap = colormaps.get_cmap(cmap)
 
     # create figure if not provided
@@ -1071,7 +1072,10 @@ def plot_dendrogram(
     sns.despine(ax=ax)
     ax.set_xlabel("Euclidean Distance")
     labels = np.array([item.get_text() for item in ax.get_yticklabels()], dtype=int)
-    labels = [" + ".join(map(str, pop_mean.index[l])) for l in labels]
+    if n_conds == 1:
+        labels = pop_mean.index[labels]
+    else:
+        labels = [" + ".join(map(str, pop_mean.index[l])) for l in labels]
     ax.set_yticklabels(labels)
 
     return ax
