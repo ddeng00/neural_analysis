@@ -17,6 +17,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from mayavi import mlab
 from scipy.spatial import ConvexHull
+from sklearn.cluster import AgglomerativeClustering
+from scipy.cluster.hierarchy import dendrogram
 
 from .preprocess import remove_groups_missing_conditions
 from .statistics import compute_confidence_interval
@@ -1001,5 +1003,75 @@ def plot_projection_2d(
         ax.plot([], [], "o", color=colors_all[i], label=" × ".join(label))
     remove_duplicate_legend_entries(ax)
     sns.move_legend(ax, loc="upper left", bbox_to_anchor=(1, 1), frameon=False)
+
+    return ax
+
+
+def plot_dendrogram(
+    data: pd.DataFrame,
+    unit: str,
+    response: str,
+    condition: str | list[str],
+    cmap: str = "tab10",
+    ax: plt.Axes | None = None,
+    n_jobs: int | None = None,
+) -> plt.Axes:
+
+    # check inputs
+    if isinstance(condition, str):
+        condition = [condition]
+    cmap = colormaps.get_cmap(cmap)
+
+    # create figure if not provided
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 6))
+
+    # process data
+    data = remove_groups_missing_conditions(data, unit, condition)
+    unit_std = data.groupby(unit)[response].std()
+    to_remove = unit_std[unit_std == 0].index
+    data = data[~data[unit].isin(to_remove)]
+
+    # normalize data
+    unit_mean = data.groupby(unit)[response].mean()
+    unit_std = data.groupby(unit)[response].std()
+    data[response] = (data[response] - data[unit].map(unit_mean)) / data[unit].map(
+        unit_std
+    )
+
+    # aggregate population data
+    pop_mean = (
+        data.groupby([unit] + condition)[response]
+        .mean()
+        .groupby(condition)
+        .agg(list)
+        .reset_index()
+    )
+    pop_mean = pop_mean.set_index(condition)
+
+    # cluster points
+    model = AgglomerativeClustering(n_clusters=None, distance_threshold=0)
+    model = model.fit(np.stack(pop_mean[response]))
+
+    # compute linkage matrix
+    counts = np.zeros(model.children_.shape[0])
+    n_samples = len(model.labels_)
+    for i, merge in enumerate(model.children_):
+        current_count = 0
+        for child_idx in merge:
+            if child_idx < n_samples:
+                current_count += 1  # leaf node
+            else:
+                current_count += counts[child_idx - n_samples]
+        counts[i] = current_count
+    linkage_matrix = np.column_stack([model.children_, model.distances_, counts])
+
+    # plot dendrogram
+    dendrogram(linkage_matrix, orientation="left", ax=ax)
+    sns.despine(ax=ax)
+    ax.set_xlabel("Euclidean Distance")
+    labels = np.array([item.get_text() for item in ax.get_yticklabels()], dtype=int)
+    labels = [" + ".join(map(str, pop_mean.index[l])) for l in labels]
+    ax.set_yticklabels(labels)
 
     return ax
