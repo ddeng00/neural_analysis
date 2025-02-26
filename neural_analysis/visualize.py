@@ -22,6 +22,8 @@ from scipy.cluster.hierarchy import dendrogram
 
 from .preprocess import remove_groups_missing_conditions
 from .statistics import compute_confidence_interval
+from .spikes import get_spikes, compute_spike_rates
+from .utils import create_rolling_window
 
 
 def plot_dropout(
@@ -172,7 +174,7 @@ def plot_spikes(
 
     # Plot without grouping
     if group_labels is None:
-        ax.eventplot(spikes, colors="black", linelengths=len(spikes) / 100)
+        ax.eventplot(spikes, linelengths=len(spikes) / 100)
         if plot_stats and stats is not None:
             ax.plot(stats, np.arange(len(spikes)), color="black", lw=2)
 
@@ -385,10 +387,12 @@ def plot_PSTH(
 
 
 def plot_spikes_with_PSTH(
-    spikes: list[npt.ArrayLike],
-    spike_rates: npt.ArrayLike,
-    timestamps: npt.ArrayLike,
+    spikes: npt.ArrayLike,
+    alignments: npt.ArrayLike,
     *,
+    window: tuple[float, float] = (-1, 2.5),
+    step: float = 0.025,
+    width: float = 0.5,
     group_labels: npt.ArrayLike | None = None,
     group_order: npt.ArrayLike | None = None,
     stats: npt.ArrayLike | None = None,
@@ -399,6 +403,7 @@ def plot_spikes_with_PSTH(
     smooth_width: float | None = None,
     axes: tuple[plt.Axes, plt.Axes] | None = None,
     cmap: str | npt.ArrayLike | dict | mpl.colors.Colormap = "tab10",
+    unit_conversion: float = 1,
 ) -> tuple[plt.Axes, plt.Axes]:
     """
     Plot spike rasters and peristimulus time histograms (PSTHs) together.
@@ -409,12 +414,16 @@ def plot_spikes_with_PSTH(
 
     Parameters
     ----------
-    spikes : list of array-like
-        A list of arrays where each array contains spike times for a unit.
-    spike_rates : array-like
-        A 2D array where each row contains the spike rates for a unit over time.
-    timestamps : array-like
-        An array of time points at which spike rates are measured.
+    spikes : array-like
+        A list of all spike times.
+    alignments : array-like
+        A list of alignment times for each spike raster.
+    window : tuple of (float, float)
+        A tuple specifying the window around the alignment times to plot the PSTH.
+    step : float, default=0.025
+        The time step to use for the PSTH.
+    width : float, default=0.5
+        The width of the PSTH window.
     group_labels : array-like or None, default=None
         An array specifying the group label for each unit. Must have the same length as `spikes`.
         If None, no grouping is used.
@@ -434,6 +443,10 @@ def plot_spikes_with_PSTH(
         If None, no error intervals are plotted.
     axes : tuple of `matplotlib.pyplot.Axes` or None, default=None
         A tuple of two Axes objects. If None, new figures and axes are created.
+    cmap : str or array-like or dict or `matplotlib.colors.Colormap`, default='tab10'
+        The name of the colormap to use for coloring the groups.
+    unit_conversion : float, default=1
+        The conversion factor to apply to the spike times. Useful for converting spike times to seconds.
 
     Returns
     -------
@@ -453,9 +466,29 @@ def plot_spikes_with_PSTH(
         )
     axes = np.ravel(axes)
 
+    # Process inputs
+    spikes = np.asarray(spikes)
+    alignments = np.asarray(alignments)
+
+    # Compute per-trial spikes and spike rates
+    trial_spikes = get_spikes(
+        spikes, alignments + window[0], alignments + window[1], alignments
+    )
+    w_starts, w_ends, w_centers = create_rolling_window(
+        window[0], window[1], step, width
+    )
+    trial_sr = np.array(
+        [
+            compute_spike_rates(
+                spikes, w_starts + ts, w_ends + ts, unit_conversion=unit_conversion
+            )
+            for ts in alignments
+        ]
+    )
+
     # Plot spike raster
     plot_spikes(
-        spikes,
+        trial_spikes,
         group_labels=group_labels,
         group_order=group_order,
         stats=stats,
@@ -467,8 +500,8 @@ def plot_spikes_with_PSTH(
 
     # Plot PSTH
     plot_PSTH(
-        spike_rates,
-        timestamps,
+        trial_sr,
+        w_centers,
         group_labels=group_labels,
         group_order=group_order,
         error_type=error_type,
@@ -479,11 +512,10 @@ def plot_spikes_with_PSTH(
     )
 
     # Misc. settings
-    axes[0].set_xlim(timestamps[0], timestamps[-1])
+    axes[0].set_xlim(*window)
+    axes[1].set_xlim(*window)
     axes[0].get_xaxis().set_visible(False)
     axes[0].set_ylabel("Trial" if stats is None else "Trial (sorted)")
-
-    axes[1].set_xlim(timestamps[0], timestamps[-1])
     try:
         axes[1].get_legend().remove()
     except AttributeError:
