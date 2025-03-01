@@ -6,4 +6,4 @@ from .population import (
     IndependentSamplesCCGP,
     PS,
 )
-from .single_unit import perform_anova
+from .single_unit import poisson_wald

@@ -1,9 +1,113 @@
+from itertools import chain, combinations, groupby
+from collections import Counter, defaultdict
+from collections.abc import Iterable
 from pathlib import Path
 import re
 
 import numpy as np
-import pandas as pd
+import numpy.typing as npt
 from scipy.io import loadmat
+from scipy.spatial.distance import pdist, squareform
+
+
+def powerset(iterable: Iterable) -> Iterable:
+    "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+    s = list(iterable)
+    return chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))
+
+
+def min_adjacency_shuffle(
+    arr: list, adj_rate: float = 0.0, disc_rate: float = 1.0
+) -> np.ndarray:
+
+    # set up random number generator
+    rng = np.random.default_rng()
+
+    # define discount function
+    discount_fn = np.vectorize(
+        lambda x: (1 - np.exp(-disc_rate * x) + adj_rate) / (1 + adj_rate)
+    )
+
+    # generate pseudorandom sequence
+    remaining = Counter(arr)
+    recency = {k: np.inf for k in remaining.keys()}
+    new_arr = []
+    for _ in range(len(arr)):
+
+        # calculate probabilities
+        probs = np.array([p * discount_fn(recency[k]) for k, p in remaining.items()])
+        if all(probs == 0):
+            return min_adjacency_shuffle(arr, adj_rate, disc_rate)
+
+        # select next item
+        sel = rng.choice(list(remaining.keys()), p=probs / np.sum(probs))
+
+        # update remaining item counts and track recency
+        remaining[sel] -= 1
+        for k in recency.keys():
+            if k == sel:
+                recency[k] = 0
+            else:
+                recency[k] += 1
+        new_arr.append(sel)
+
+    return np.asarray(new_arr)
+
+
+def max_diversity_subset(
+    arr: npt.ArrayLike, n: int, metric: str = "hamming"
+) -> np.ndarray:
+
+    # Check dimensions
+    arr = np.asarray(arr)
+    if n > arr.shape[0]:
+        raise ValueError("n must be less than or equal to the number of items")
+
+    # Compute distance matrix
+    dist_matrix = squareform(pdist(arr, metric=metric))
+
+    # Start with the item that has the highest total distance (i.e., most "dissimilar" overall).
+    total_distances = np.sum(dist_matrix, axis=1)
+    first = np.argmax(total_distances)
+    selected = [first]
+
+    # Create a set of candidate indices (those not yet selected).
+    candidates = set(range(arr.shape[0]))
+    candidates.remove(first)
+
+    # Iteratively add the candidate that maximizes the total distance to already selected items.
+    while len(selected) < n:
+        best_candidate = None
+        best_increase = -np.inf
+
+        for candidate in candidates:
+            # Calculate the sum of distances from candidate to each already selected item.
+            increase = sum(dist_matrix[candidate][j] for j in selected)
+            if increase > best_increase:
+                best_increase = increase
+                best_candidate = candidate
+
+        selected.append(best_candidate)
+        candidates.remove(best_candidate)
+
+    return np.take(arr, selected, axis=0)
+
+
+def repetitiveness(arr: npt.ArrayLike) -> float:
+    occuraces = defaultdict(list)
+    for i, ele in enumerate(arr):
+        occuraces[ele].append(i)
+    distances = []
+    for ele in occuraces.values():
+        if len(ele) > 1:
+            distances.extend([ele[i + 1] - ele[i] for i in range(len(ele) - 1)])
+    if distances:
+        return sum(distances) / len(distances)
+    return 0
+
+
+def max_rep_length(arr: npt.ArrayLike) -> int:
+    return max(len(list(group)) for _, group in groupby(arr))
 
 
 def remove_subsets(lst: list[list]) -> list[list]:

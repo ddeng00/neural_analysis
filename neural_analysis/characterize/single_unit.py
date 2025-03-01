@@ -1,80 +1,57 @@
-from typing import Callable
-from itertools import product
-
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
-from statsmodels.formula.api import ols
-from statsmodels.stats.anova import anova_lm
-from statsmodels.stats.rates import test_poisson
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from joblib import Parallel, delayed
 
-from ..spikes import compute_spike_rates, get_spikes
+from ..utils import powerset
 
 
-def perform_anova(
+def poisson_wald(
     data: pd.DataFrame,
-    target: str,
-    factor: str | list[str],
-    nuisance: str | list[str] | None = None,
-    *,
-    target_transform: Callable | None = np.sqrt,
-    include_interactions: bool = True,
-) -> pd.Series:
-    """
-    Perform a n-way ANOVA on the data. The data should be in long format.
+    formula: str,
+    n_permutes: int = 1024,
+    alpha: float = 0.05,
+    allow_sig_overlaps: bool = False,
+    n_jobs: int = -1,
+):
 
-    Parameters
-    ----------
-    data : pd.DataFrame
-        The data in long format.
-    target : str
-        The name of the target variable.
-    factors : list[str]
-        The names of the factors.
-    target_transform : Callable or None, default=`numpy.sqrt`
-        The transformation to apply to the target variable.
-    include_interactions : bool, default=True
-        Whether to include interactions, by default True.
-    include_f_statistic : bool, default=True
-        Whether to include the F-statistic, by default True.
+    # define GLM and helper function
+    response = formula.split("~")[0].strip()
 
-    Returns
-    -------
-    anova_table : pd.DataFrame
-        The ANOVA table.
-    """
+    def _helper(permute):
+        df = data.copy()
+        if permute:
+            df[response] = np.random.permutation(df[response].values)
+        model = smf.glm(formula=formula, data=df, family=sm.families.Poisson())
+        return model.fit().wald_test_terms(scalar=True).table
 
-    # process inputs
-    if not isinstance(factor, list):
-        factor = [factor]
-    if nuisance is not None and not isinstance(nuisance, list):
-        nuisance = [nuisance]
+    # get baseline statistics
+    results = _helper(False)
 
-    # process data
-    data = data[[target] + factor].copy()
-    if target_transform is not None:
-        data[target] = data[target].apply(target_transform)
-    data[factor] = data[factor].astype("category")
+    # compute permutation statistics
+    if n_permutes > 0:
+        null = list(
+            Parallel(n_jobs=n_jobs)(delayed(_helper)(True) for _ in range(n_permutes))
+        )
+        null = pd.concat(null)
+        results["pvalue"] = [
+            (null.loc[term, "statistic"] <= results.loc[term, "statistic"]).mean()
+            for term in results.index
+        ]
 
-    # regress out nuisance variables
-    if nuisance is not None:
-        formula = f"{target} ~ {' + '.join(nuisance)}"
-        model = ols(formula, data).fit()
-        data[target] = model.resid
+    # assign significance
+    results["is_significant"] = results["pvalue"] < alpha
+    if not allow_sig_overlaps:
+        sig_terms = results[results["is_significant"]].index
+        for term in sorted(sig_terms, key=lambda x: len(x.split(":")), reverse=True):
+            term = term.split(":")
+            if len(term) > 1:
+                subterms = [":".join(x) for x in powerset(term)]
+                results.loc[subterms[1:-1], "is_significant"] = False
 
-    # perform ANOVA
-    if include_interactions:
-        formula = f"{target} ~ {' * '.join(factor)}"
-    else:
-        formula = f"{target} ~ {' + '.join(factor)}"
-    model = ols(formula, data).fit()
-    anova_table = anova_lm(model, typ=3 if include_interactions else 2)
-    anova_table = anova_table.iloc[1:-1][["sum_sq", "F", "PR(>F)"]]
-    anova_table.reset_index(inplace=True)
-    anova_table["index"] = anova_table["index"].apply(lambda x: x.split(":"))
-    anova_table.columns = ["factor", "sum_sq", "F", "p"]
-
-    return anova_table
+    results = results.reset_index(names="predictor")
+    return results[results["predictor"] != "Intercept"]
 
 
 # def get_single_trial_latencies(

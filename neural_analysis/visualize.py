@@ -19,6 +19,9 @@ from mayavi import mlab
 from scipy.spatial import ConvexHull
 from sklearn.cluster import AgglomerativeClustering
 from scipy.cluster.hierarchy import dendrogram
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from joblib import Parallel, delayed
 
 from .preprocess import remove_groups_missing_conditions
 from .statistics import compute_confidence_interval
@@ -231,6 +234,8 @@ def plot_PSTH(
     smooth_width: float | None = None,
     ax: plt.Axes | None = None,
     cmap: str | npt.ArrayLike | dict | mpl.colors.Colormap = "tab10",
+    n_permutes: int = 0,
+    n_jobs: int = -1,
 ) -> plt.Axes:
     """
     Plot peristimulus time histogram (PSTH).
@@ -351,11 +356,29 @@ def plot_PSTH(
     # Plot significance
     if group_labels is not None and sig_test:
         y_max = ax.get_ylim()[1]
-        spike_rates = np.sqrt(spike_rates).T
-        spike_rates += np.random.normal(0, 1e-6, spike_rates.shape)
-        pvals = np.array(
-            [anova_oneway(rate, group_labels).pvalue for rate in spike_rates]
-        )
+
+        def _helper(permute):
+            srs = np.random.permutation(spike_rates) if permute else spike_rates
+            pvals = []
+            for rate in srs.T:
+                d = {"y": rate, "x": group_labels, "trial": np.arange(len(rate))}
+                model = smf.glm("y ~ x + trial", data=d, family=sm.families.Poisson())
+                try:
+                    wald = model.fit().wald_test_terms(scalar=True)
+                    pvals.append(wald.table.loc["x", "pvalue"])
+                except:
+                    pvals.append(np.nan)
+            return np.array(pvals)
+
+        pvals = _helper(False)
+        if n_permutes > 0:
+            null = list(
+                Parallel(n_jobs=n_jobs)(
+                    delayed(_helper)(True) for _ in range(n_permutes)
+                )
+            )
+            null = np.array(null)
+            pvals = (pvals >= null).mean(axis=0)
 
         sig_mask = pvals < 0.001
         ax.plot(
@@ -404,6 +427,8 @@ def plot_spikes_with_PSTH(
     axes: tuple[plt.Axes, plt.Axes] | None = None,
     cmap: str | npt.ArrayLike | dict | mpl.colors.Colormap = "tab10",
     unit_conversion: float = 1,
+    n_permutes: int = 0,
+    n_jobs: int = -1,
 ) -> tuple[plt.Axes, plt.Axes]:
     """
     Plot spike rasters and peristimulus time histograms (PSTHs) together.
@@ -509,6 +534,8 @@ def plot_spikes_with_PSTH(
         smooth_width=smooth_width,
         ax=axes[1],
         cmap=cmap,
+        n_permutes=n_permutes,
+        n_jobs=n_jobs,
     )
 
     # Misc. settings

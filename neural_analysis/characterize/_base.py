@@ -165,7 +165,7 @@ class _BaseEstimator(ABC):
         self,
         n_resamples: int = 1,
         *,
-        permute: bool = True,
+        n_permutes: int = 0,
         n_splits: int = 5,
         n_repeats: int = 1,
         shuffle: bool = False,
@@ -181,8 +181,8 @@ class _BaseEstimator(ABC):
         ----------
         n_resamples : int, default=1
             Number of resamples to perform.
-        permute : bool, default=False
-            If True, also estimate the permutation null.
+        n_permutes : int, default=0
+            Number of permutations to estimate the null distribution. If 0, no permutation is performed.
         n_splits : int, default=5
             Number of folds in cross-validation.
         n_repeats : int, default=1
@@ -221,7 +221,7 @@ class _BaseEstimator(ABC):
                             clf,
                             clf_kwargs,
                             return_clfs,
-                            permute,
+                            n_permutes,
                         )
                         for i in range(n_resamples)
                     ),
@@ -238,13 +238,13 @@ class _BaseEstimator(ABC):
                     clf,
                     clf_kwargs,
                     return_clfs,
-                    permute,
+                    n_permutes,
                 )
                 for i in range(n_resamples)
             )
 
         # return results
-        if not permute:
+        if not n_permutes:
             results = pd.DataFrame.from_records(chain.from_iterable(results))
             results = results.convert_dtypes()
             return results
@@ -267,7 +267,7 @@ class _BaseEstimator(ABC):
         clf: BaseEstimator,
         clf_kwargs: dict | None,
         return_clfs: bool,
-        permute: bool,
+        n_permutes: int,
     ) -> list[pd.DataFrame] | tuple[list[pd.DataFrame], list[pd.DataFrame]]:
 
         # generate new random state
@@ -303,28 +303,29 @@ class _BaseEstimator(ABC):
             d_res["dichotomy"] = dichot_name
             d_res["named"] = "unnamed" not in dichot_name
             res.append(d_res)
-        if not permute:
+        if n_permutes <= 0:
             return res
 
         # estimate permutation null
         res_perm = []
-        X = self.__class__.shuffle(X, condition, rs)
-        for i, dichot_name in enumerate(self.dichotomy_names):
-            d_res = self.__class__.validate(
-                X,
-                ys[i],
-                condition,
-                n_splits=n_splits,
-                n_repeats=n_repeats,
-                shuffle=shuffle,
-                clf=clf,
-                clf_kwargs=clf_kwargs,
-                return_clfs=return_clfs,
-                random_state=rs,
-            )
-            d_res["dichotomy"] = dichot_name
-            d_res["named"] = "unnamed" not in dichot_name
-            res_perm.append(d_res)
+        for _ in range(n_permutes):
+            X = self.__class__.shuffle(X, condition, rs)
+            for i, dichot_name in enumerate(self.dichotomy_names):
+                d_res = self.__class__.validate(
+                    X,
+                    ys[i],
+                    condition,
+                    n_splits=n_splits,
+                    n_repeats=n_repeats,
+                    shuffle=shuffle,
+                    clf=clf,
+                    clf_kwargs=clf_kwargs,
+                    return_clfs=return_clfs,
+                    random_state=rs,
+                )
+                d_res["dichotomy"] = dichot_name
+                d_res["named"] = "unnamed" not in dichot_name
+                res_perm.append(d_res)
 
         return res, res_perm
 
@@ -466,7 +467,7 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         clf: BaseEstimator,
         clf_kwargs: dict | None,
         return_clfs: bool,
-        permute: bool,
+        n_permutes: int,
     ) -> list[pd.DataFrame] | tuple[list[pd.DataFrame], list[pd.DataFrame]]:
 
         # generate new random state
@@ -506,32 +507,33 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
                 d_res["train"] = self.response[i]
                 d_res["test"] = self.response[j]
                 res.append(d_res)
-        if not permute:
+        if n_permutes <= 0:
             return res
 
         # estimate permutation null
         res_perm = []
-        Xs = self.shuffle(Xs, condition, rs)
-        for k, dichot_name in enumerate(self.dichotomy_names):
-            for i, j in product(range(len(self.response)), repeat=2):
-                d_res = self.__class__.validate(
-                    Xs[i],
-                    Xs[j],
-                    ys[k],
-                    condition,
-                    n_splits=n_splits,
-                    n_repeats=n_repeats,
-                    shuffle=shuffle,
-                    clf=clf,
-                    clf_kwargs=clf_kwargs,
-                    return_clfs=return_clfs,
-                    random_state=rs,
-                )
-                d_res["dichotomy"] = dichot_name
-                d_res["named"] = "unnamed" not in dichot_name
-                d_res["train"] = self.response[i]
-                d_res["test"] = self.response[j]
-                res_perm.append(d_res)
+        for _ in range(n_permutes):
+            Xs = self.shuffle(Xs, condition, rs)
+            for k, dichot_name in enumerate(self.dichotomy_names):
+                for i, j in product(range(len(self.response)), repeat=2):
+                    d_res = self.__class__.validate(
+                        Xs[i],
+                        Xs[j],
+                        ys[k],
+                        condition,
+                        n_splits=n_splits,
+                        n_repeats=n_repeats,
+                        shuffle=shuffle,
+                        clf=clf,
+                        clf_kwargs=clf_kwargs,
+                        return_clfs=return_clfs,
+                        random_state=rs,
+                    )
+                    d_res["dichotomy"] = dichot_name
+                    d_res["named"] = "unnamed" not in dichot_name
+                    d_res["train"] = self.response[i]
+                    d_res["test"] = self.response[j]
+                    res_perm.append(d_res)
 
         return res, res_perm
 
@@ -720,7 +722,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         self,
         n_resamples: int = 1,
         *,
-        permute: bool = True,
+        n_permutes: int = 0,
         n_splits: int | dict[Any, int] = 5,
         n_repeats: int | dict[Any, int] = 1,
         shuffle: bool | dict[Any, bool] = False,
@@ -746,7 +748,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
 
         return super().score(
             n_resamples=n_resamples,
-            permute=permute,
+            n_permutes=n_permutes,
             n_splits=n_splits,
             n_repeats=n_repeats,
             shuffle=shuffle,
@@ -765,7 +767,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         clf: BaseEstimator,
         clf_kwargs: dict | None,
         return_clfs: bool,
-        permute: bool,
+        n_permutes: int,
     ) -> list[pd.DataFrame] | tuple[list[pd.DataFrame], list[pd.DataFrame]]:
 
         # generate new random state
@@ -817,47 +819,48 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                 d_res["train"] = self.group[i]
                 d_res["test"] = self.group[j]
                 res.append(d_res)
-        if not permute:
+        if n_permutes <= 0:
             return res
 
         # estimate permutation null
         res_perm = []
-        for i, j in product(range(len(self.data)), repeat=2):
-            if n_splits[i] == 0:
-                continue
+        for _ in range(n_permutes):
+            for i, j in product(range(len(self.data)), repeat=2):
+                if n_splits[i] == 0:
+                    continue
 
-            # pool data and shuffle
-            if i == j:
-                Xi = Xj = self.shuffle(Xs[i], conditions[i], rs)
-            else:
-                X_ij = np.vstack([Xs[i], Xs[j]])
-                c_ij = np.vstack([conditions[i], conditions[j]])
-                X_ij = self.shuffle(X_ij, c_ij, rs)
-                Xi = X_ij[: len(Xs[i])]
-                Xj = X_ij[len(Xs[i]) :]
+                # pool data and shuffle
+                if i == j:
+                    Xi = Xj = self.shuffle(Xs[i], conditions[i], rs)
+                else:
+                    X_ij = np.vstack([Xs[i], Xs[j]])
+                    c_ij = np.vstack([conditions[i], conditions[j]])
+                    X_ij = self.shuffle(X_ij, c_ij, rs)
+                    Xi = X_ij[: len(Xs[i])]
+                    Xj = X_ij[len(Xs[i]) :]
 
-            for k, dichot_name in enumerate(self.dichotomy_names):
-                d_res = self.__class__.validate(
-                    Xi,
-                    Xj,
-                    ys[i][k],
-                    ys[j][k],
-                    conditions[i],
-                    conditions[j],
-                    same_group=i == j,
-                    n_splits=n_splits[i],
-                    n_repeats=n_repeats[i],
-                    shuffle=shuffle[i],
-                    clf=clf,
-                    clf_kwargs=clf_kwargs,
-                    return_clfs=return_clfs,
-                    random_state=rs,
-                )
-                d_res["dichotomy"] = dichot_name
-                d_res["named"] = "unnamed" not in dichot_name
-                d_res["train"] = self.group[i]
-                d_res["test"] = self.group[j]
-                res_perm.append(d_res)
+                for k, dichot_name in enumerate(self.dichotomy_names):
+                    d_res = self.__class__.validate(
+                        Xi,
+                        Xj,
+                        ys[i][k],
+                        ys[j][k],
+                        conditions[i],
+                        conditions[j],
+                        same_group=i == j,
+                        n_splits=n_splits[i],
+                        n_repeats=n_repeats[i],
+                        shuffle=shuffle[i],
+                        clf=clf,
+                        clf_kwargs=clf_kwargs,
+                        return_clfs=return_clfs,
+                        random_state=rs,
+                    )
+                    d_res["dichotomy"] = dichot_name
+                    d_res["named"] = "unnamed" not in dichot_name
+                    d_res["train"] = self.group[i]
+                    d_res["test"] = self.group[j]
+                    res_perm.append(d_res)
 
         return res, res_perm
 
