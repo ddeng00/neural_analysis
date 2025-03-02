@@ -4,15 +4,12 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from joblib import Parallel, delayed
 
-from ..utils import powerset
-
 
 def poisson_wald(
     data: pd.DataFrame,
     formula: str,
     n_permutes: int = 1024,
     alpha: float = 0.05,
-    allow_sig_overlaps: bool = False,
     n_jobs: int = -1,
 ):
 
@@ -42,15 +39,8 @@ def poisson_wald(
 
     # assign significance
     results["is_significant"] = results["pvalue"] < alpha
-    if not allow_sig_overlaps:
-        sig_terms = results[results["is_significant"]].index
-        for term in sorted(sig_terms, key=lambda x: len(x.split(":")), reverse=True):
-            term = term.split(":")
-            if len(term) > 1:
-                subterms = [":".join(x) for x in powerset(term)]
-                results.loc[subterms[1:-1], "is_significant"] = False
-
     results = results.reset_index(names="predictor")
+
     return results[results["predictor"] != "Intercept"]
 
 
