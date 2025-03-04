@@ -115,15 +115,10 @@ def construct_pseudopopulation(
 
     # Note: previous groupby ensures that conditions are sorted
     if not isinstance(response, list):
-        X = np.column_stack(resampled.groupby(unit)[response].apply(np.vstack)).astype(
-            float
-        )
+        X = np.column_stack(resampled.groupby(unit)[response].agg(list))
         conds = resampled[condition].iloc[: len(X)].to_numpy(str)
         return X, conds
     else:
-        Xs = [
-            np.column_stack(resampled.groupby(unit)[v].apply(np.vstack)).astype(float)
-            for v in response
-        ]
+        Xs = [np.column_stack(resampled.groupby(unit)[v].agg(list)) for v in response]
         conds = resampled[condition].iloc[: len(Xs[0])].to_numpy(str)
         return Xs, conds
