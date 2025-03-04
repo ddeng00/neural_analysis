@@ -15,7 +15,7 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import MDS
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from mayavi import mlab
+# from mayavi import mlab
 from scipy.spatial import ConvexHull
 from sklearn.cluster import AgglomerativeClustering
 from scipy.cluster.hierarchy import dendrogram
@@ -754,319 +754,319 @@ def plot_metrics(
     return ax
 
 
-def plot_projection(
-    data: pd.DataFrame,
-    unit: str,
-    response: str,
-    condition: str | list[str],
-    cmap: str = "tab10",
-    interactive: bool = False,
-    ax: plt.Axes | None = None,
-    n_jobs: int | None = None,
-) -> plt.Axes:
-    """
-    Plot a 3D projection of the data using PCA.
+# def plot_projection(
+#     data: pd.DataFrame,
+#     unit: str,
+#     response: str,
+#     condition: str | list[str],
+#     cmap: str = "tab10",
+#     interactive: bool = False,
+#     ax: plt.Axes | None = None,
+#     n_jobs: int | None = None,
+# ) -> plt.Axes:
+#     """
+#     Plot a 3D projection of the data using PCA.
 
-    This function plots a 3D projection of the data using PCA. Each point in the plot represents the mean response of
-    a unit to different conditions. The points are colored based on the conditions.
+#     This function plots a 3D projection of the data using PCA. Each point in the plot represents the mean response of
+#     a unit to different conditions. The points are colored based on the conditions.
 
-    Parameters
-    ----------
-    data : pd.DataFrame
-        The data to plot.
-    unit : str
-        The column name of the unit identifier.
-    response : str
-        The column name of the response variable.
-    condition : str or list of str
-        The column name(s) of the condition(s) to plot.
-    cmap : str, default='tab10'
-        The name of the colormap to use for coloring the conditions.
-    interactive : bool, default=False
-        If True, the plot is displayed interactively using Mayavi.
-    ax : `matplotlib.pyplot.Axes` or None, default=None
-        A matplotlib Axes object. If None, a new figure and axes are created.
+#     Parameters
+#     ----------
+#     data : pd.DataFrame
+#         The data to plot.
+#     unit : str
+#         The column name of the unit identifier.
+#     response : str
+#         The column name of the response variable.
+#     condition : str or list of str
+#         The column name(s) of the condition(s) to plot.
+#     cmap : str, default='tab10'
+#         The name of the colormap to use for coloring the conditions.
+#     interactive : bool, default=False
+#         If True, the plot is displayed interactively using Mayavi.
+#     ax : `matplotlib.pyplot.Axes` or None, default=None
+#         A matplotlib Axes object. If None, a new figure and axes are created.
 
-    Returns
-    -------
-    ax : `matplotlib.pyplot.Axes`
-        The Axes object containing the plot.
-    """
+#     Returns
+#     -------
+#     ax : `matplotlib.pyplot.Axes`
+#         The Axes object containing the plot.
+#     """
 
-    # check inputs
-    if isinstance(condition, str):
-        condition = [condition]
-    cmap = colormaps.get_cmap(cmap)
+#     # check inputs
+#     if isinstance(condition, str):
+#         condition = [condition]
+#     cmap = colormaps.get_cmap(cmap)
 
-    # create a new figure if no Axes object is provided
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(8, 8))
+#     # create a new figure if no Axes object is provided
+#     if ax is None:
+#         fig, ax = plt.subplots(figsize=(8, 8))
 
-    # process data
-    data = remove_groups_missing_conditions(data, unit, condition)
-    unit_std = data.groupby(unit)[response].std()
-    to_remove = unit_std[unit_std == 0].index
-    data = data[~data[unit].isin(to_remove)]
+#     # process data
+#     data = remove_groups_missing_conditions(data, unit, condition)
+#     unit_std = data.groupby(unit)[response].std()
+#     to_remove = unit_std[unit_std == 0].index
+#     data = data[~data[unit].isin(to_remove)]
 
-    # normalize data
-    unit_mean = data.groupby(unit)[response].mean()
-    unit_std = data.groupby(unit)[response].std()
-    data[response] = (data[response] - data[unit].map(unit_mean)) / data[unit].map(
-        unit_std
-    )
+#     # normalize data
+#     unit_mean = data.groupby(unit)[response].mean()
+#     unit_std = data.groupby(unit)[response].std()
+#     data[response] = (data[response] - data[unit].map(unit_mean)) / data[unit].map(
+#         unit_std
+#     )
 
-    # aggregate population data and apply MDS transformation
-    proj = MDS(n_components=3, n_init=64, max_iter=2400, n_jobs=n_jobs)
-    pop_mean = (
-        data.groupby([unit] + condition)[response]
-        .mean()
-        .groupby(condition)
-        .agg(list)
-        .reset_index()
-    )
-    X_mean = proj.fit_transform(np.stack(pop_mean[response]))
+#     # aggregate population data and apply MDS transformation
+#     proj = MDS(n_components=3, n_init=64, max_iter=2400, n_jobs=n_jobs)
+#     pop_mean = (
+#         data.groupby([unit] + condition)[response]
+#         .mean()
+#         .groupby(condition)
+#         .agg(list)
+#         .reset_index()
+#     )
+#     X_mean = proj.fit_transform(np.stack(pop_mean[response]))
 
-    # generate plotting styles
-    y = pop_mean[condition].to_numpy(dtype=str)
-    offset, colors_lv1 = 0, None
+#     # generate plotting styles
+#     y = pop_mean[condition].to_numpy(dtype=str)
+#     offset, colors_lv1 = 0, None
 
-    # define color for first level of condition (if applicable)
-    if len(condition) > 1:
-        u_lv1, _ = np.unique(y[:, 0], return_inverse=True)
-        offset = len(u_lv1)
-        colors_lv1 = {u: cmap(i) for i, u in enumerate(u_lv1)}
+#     # define color for first level of condition (if applicable)
+#     if len(condition) > 1:
+#         u_lv1, _ = np.unique(y[:, 0], return_inverse=True)
+#         offset = len(u_lv1)
+#         colors_lv1 = {u: cmap(i) for i, u in enumerate(u_lv1)}
 
-    # define color for all conditions
-    start = 0 if len(condition) == 1 else 1
-    _, l_all = np.unique(y[:, start:], return_inverse=True, axis=0)
-    colors_all = [cmap(l + offset) for l in l_all]
+#     # define color for all conditions
+#     start = 0 if len(condition) == 1 else 1
+#     _, l_all = np.unique(y[:, start:], return_inverse=True, axis=0)
+#     colors_all = [cmap(l + offset) for l in l_all]
 
-    # set up the figure
-    fig = mlab.figure(size=(1000, 1000))
+#     # set up the figure
+#     fig = mlab.figure(size=(1000, 1000))
 
-    xmin, xmax = np.min(X_mean[:, 0]), np.max(X_mean[:, 0])
-    ymin, ymax = np.min(X_mean[:, 1]), np.max(X_mean[:, 1])
-    zmin, zmax = np.min(X_mean[:, 2]), np.max(X_mean[:, 2])
-    max_val = max(xmax - xmin, ymax - ymin, zmax - zmin)
+#     xmin, xmax = np.min(X_mean[:, 0]), np.max(X_mean[:, 0])
+#     ymin, ymax = np.min(X_mean[:, 1]), np.max(X_mean[:, 1])
+#     zmin, zmax = np.min(X_mean[:, 2]), np.max(X_mean[:, 2])
+#     max_val = max(xmax - xmin, ymax - ymin, zmax - zmin)
 
-    # plot edges
-    tube_radius = 0.015 * max_val
-    if len(condition) > 1:
-        edge_sets = defaultdict(list)
-        for i, j in combinations(range(len(y)), 2):
-            li, lj = y[i], y[j]
-            Xi, Xj = X_mean[i], X_mean[j]
-            if li[0] != lj[0] and np.all(li[1:] == lj[1:]):
-                mlab.plot3d(
-                    [Xi[0], Xj[0]],
-                    [Xi[1], Xj[1]],
-                    [Xi[2], Xj[2]],
-                    tube_radius=tube_radius,
-                    color=(1, 1, 1),
-                    opacity=0.25,
-                )
-            # elif li[0] == lj[0] and np.sum(li[1:] == lj[1:]) == 1:
-            elif li[0] == lj[0]:
-                edge_sets[li[0]].extend([Xi, Xj])
-                mlab.plot3d(
-                    [Xi[0], Xj[0]],
-                    [Xi[1], Xj[1]],
-                    [Xi[2], Xj[2]],
-                    tube_radius=tube_radius,
-                    color=colors_lv1[li[0]][0:3],
-                )
-    else:
-        edge_sets = defaultdict(list)
-        for i, j in combinations(range(len(y)), 2):
-            li, lj = y[i], y[j]
-            Xi, Xj = X_mean[i], X_mean[j]
-            mlab.plot3d(
-                [Xi[0], Xj[0]],
-                [Xi[1], Xj[1]],
-                [Xi[2], Xj[2]],
-                tube_radius=tube_radius / 2,
-                color=(1, 1, 1),
-                opacity=0.25,
-            )
+#     # plot edges
+#     tube_radius = 0.015 * max_val
+#     if len(condition) > 1:
+#         edge_sets = defaultdict(list)
+#         for i, j in combinations(range(len(y)), 2):
+#             li, lj = y[i], y[j]
+#             Xi, Xj = X_mean[i], X_mean[j]
+#             if li[0] != lj[0] and np.all(li[1:] == lj[1:]):
+#                 mlab.plot3d(
+#                     [Xi[0], Xj[0]],
+#                     [Xi[1], Xj[1]],
+#                     [Xi[2], Xj[2]],
+#                     tube_radius=tube_radius,
+#                     color=(1, 1, 1),
+#                     opacity=0.25,
+#                 )
+#             # elif li[0] == lj[0] and np.sum(li[1:] == lj[1:]) == 1:
+#             elif li[0] == lj[0]:
+#                 edge_sets[li[0]].extend([Xi, Xj])
+#                 mlab.plot3d(
+#                     [Xi[0], Xj[0]],
+#                     [Xi[1], Xj[1]],
+#                     [Xi[2], Xj[2]],
+#                     tube_radius=tube_radius,
+#                     color=colors_lv1[li[0]][0:3],
+#                 )
+#     else:
+#         edge_sets = defaultdict(list)
+#         for i, j in combinations(range(len(y)), 2):
+#             li, lj = y[i], y[j]
+#             Xi, Xj = X_mean[i], X_mean[j]
+#             mlab.plot3d(
+#                 [Xi[0], Xj[0]],
+#                 [Xi[1], Xj[1]],
+#                 [Xi[2], Xj[2]],
+#                 tube_radius=tube_radius / 2,
+#                 color=(1, 1, 1),
+#                 opacity=0.25,
+#             )
 
-    # plot faces
-    if len(condition) > 2:
-        for cond, edges in edge_sets.items():
-            vertices = np.unique(edges, axis=0)
-            triangles = ConvexHull(vertices).simplices
-            mlab.triangular_mesh(
-                vertices[:, 0],
-                vertices[:, 1],
-                vertices[:, 2],
-                triangles,
-                color=colors_lv1[cond][0:3],
-                opacity=0.25,
-            )
+#     # plot faces
+#     if len(condition) > 2:
+#         for cond, edges in edge_sets.items():
+#             vertices = np.unique(edges, axis=0)
+#             triangles = ConvexHull(vertices).simplices
+#             mlab.triangular_mesh(
+#                 vertices[:, 0],
+#                 vertices[:, 1],
+#                 vertices[:, 2],
+#                 triangles,
+#                 color=colors_lv1[cond][0:3],
+#                 opacity=0.25,
+#             )
 
-    # plot points
-    point_radius = 0.1 * max_val
-    for i in range(len(X_mean)):
-        xx, yy, zz = X_mean[i]
-        mlab.points3d(xx, yy, zz, color=colors_all[i][0:3], scale_factor=point_radius)
+#     # plot points
+#     point_radius = 0.1 * max_val
+#     for i in range(len(X_mean)):
+#         xx, yy, zz = X_mean[i]
+#         mlab.points3d(xx, yy, zz, color=colors_all[i][0:3], scale_factor=point_radius)
 
-    # convert to image for Matplotlib
-    mlab.view(distance="auto", focalpoint="auto")
-    fig.scene._lift()
-    img = mlab.screenshot(figure=fig, antialiased=True)
-    img = img[100:-100, 100:-100]
-    if interactive:
-        mlab.show()
-    else:
-        mlab.close()
+#     # convert to image for Matplotlib
+#     mlab.view(distance="auto", focalpoint="auto")
+#     fig.scene._lift()
+#     img = mlab.screenshot(figure=fig, antialiased=True)
+#     img = img[100:-100, 100:-100]
+#     if interactive:
+#         mlab.show()
+#     else:
+#         mlab.close()
 
-    # plot projection screenshot
-    ax.imshow(img)
-    ax.axis("off")
+#     # plot projection screenshot
+#     ax.imshow(img)
+#     ax.axis("off")
 
-    # add legend
-    if len(condition) > 2:
-        for k, v in colors_lv1.items():
-            ax.plot([], [], lw=5, color=v, label=k)
-    elif len(condition) > 1:
-        for k, v in colors_lv1.items():
-            ax.plot([], [], color=v, label=k)
-    for i, label in enumerate(y[:, start:]):
-        ax.plot([], [], "o", color=colors_all[i], label=" × ".join(label))
-    remove_duplicate_legend_entries(ax)
-    sns.move_legend(ax, loc="upper left", bbox_to_anchor=(1, 1), frameon=False)
+#     # add legend
+#     if len(condition) > 2:
+#         for k, v in colors_lv1.items():
+#             ax.plot([], [], lw=5, color=v, label=k)
+#     elif len(condition) > 1:
+#         for k, v in colors_lv1.items():
+#             ax.plot([], [], color=v, label=k)
+#     for i, label in enumerate(y[:, start:]):
+#         ax.plot([], [], "o", color=colors_all[i], label=" × ".join(label))
+#     remove_duplicate_legend_entries(ax)
+#     sns.move_legend(ax, loc="upper left", bbox_to_anchor=(1, 1), frameon=False)
 
-    return ax
+#     return ax
 
 
-def plot_projection_2d(
-    data: pd.DataFrame,
-    unit: str,
-    response: str,
-    condition: str | list[str],
-    cmap: str = "tab10",
-    interactive: bool = False,
-    ax: plt.Axes | None = None,
-    n_jobs: int | None = None,
-) -> plt.Axes:
-    """
-    Plot a 3D projection of the data using PCA.
+# def plot_projection_2d(
+#     data: pd.DataFrame,
+#     unit: str,
+#     response: str,
+#     condition: str | list[str],
+#     cmap: str = "tab10",
+#     interactive: bool = False,
+#     ax: plt.Axes | None = None,
+#     n_jobs: int | None = None,
+# ) -> plt.Axes:
+#     """
+#     Plot a 3D projection of the data using PCA.
 
-    This function plots a 3D projection of the data using PCA. Each point in the plot represents the mean response of
-    a unit to different conditions. The points are colored based on the conditions.
+#     This function plots a 3D projection of the data using PCA. Each point in the plot represents the mean response of
+#     a unit to different conditions. The points are colored based on the conditions.
 
-    Parameters
-    ----------
-    data : pd.DataFrame
-        The data to plot.
-    unit : str
-        The column name of the unit identifier.
-    response : str
-        The column name of the response variable.
-    condition : str or list of str
-        The column name(s) of the condition(s) to plot.
-    cmap : str, default='tab10'
-        The name of the colormap to use for coloring the conditions.
-    interactive : bool, default=False
-        If True, the plot is displayed interactively using Mayavi.
-    ax : `matplotlib.pyplot.Axes` or None, default=None
-        A matplotlib Axes object. If None, a new figure and axes are created.
+#     Parameters
+#     ----------
+#     data : pd.DataFrame
+#         The data to plot.
+#     unit : str
+#         The column name of the unit identifier.
+#     response : str
+#         The column name of the response variable.
+#     condition : str or list of str
+#         The column name(s) of the condition(s) to plot.
+#     cmap : str, default='tab10'
+#         The name of the colormap to use for coloring the conditions.
+#     interactive : bool, default=False
+#         If True, the plot is displayed interactively using Mayavi.
+#     ax : `matplotlib.pyplot.Axes` or None, default=None
+#         A matplotlib Axes object. If None, a new figure and axes are created.
 
-    Returns
-    -------
-    ax : `matplotlib.pyplot.Axes`
-        The Axes object containing the plot.
-    """
+#     Returns
+#     -------
+#     ax : `matplotlib.pyplot.Axes`
+#         The Axes object containing the plot.
+#     """
 
-    # check inputs
-    if isinstance(condition, str):
-        condition = [condition]
-    cmap = colormaps.get_cmap(cmap)
+#     # check inputs
+#     if isinstance(condition, str):
+#         condition = [condition]
+#     cmap = colormaps.get_cmap(cmap)
 
-    # create a new figure if no Axes object is provided
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(8, 8))
+#     # create a new figure if no Axes object is provided
+#     if ax is None:
+#         fig, ax = plt.subplots(figsize=(8, 8))
 
-    # process data
-    data = remove_groups_missing_conditions(data, unit, condition)
-    unit_std = data.groupby(unit)[response].std()
-    to_remove = unit_std[unit_std == 0].index
-    data = data[~data[unit].isin(to_remove)]
+#     # process data
+#     data = remove_groups_missing_conditions(data, unit, condition)
+#     unit_std = data.groupby(unit)[response].std()
+#     to_remove = unit_std[unit_std == 0].index
+#     data = data[~data[unit].isin(to_remove)]
 
-    # normalize data
-    unit_mean = data.groupby(unit)[response].mean()
-    unit_std = data.groupby(unit)[response].std()
-    data[response] = (data[response] - data[unit].map(unit_mean)) / data[unit].map(
-        unit_std
-    )
+#     # normalize data
+#     unit_mean = data.groupby(unit)[response].mean()
+#     unit_std = data.groupby(unit)[response].std()
+#     data[response] = (data[response] - data[unit].map(unit_mean)) / data[unit].map(
+#         unit_std
+#     )
 
-    # aggregate population data and apply MDS transformation
-    proj = MDS(n_components=2, n_init=64, max_iter=2400, n_jobs=n_jobs)
-    pop_mean = (
-        data.groupby([unit] + condition)[response]
-        .mean()
-        .groupby(condition)
-        .agg(list)
-        .reset_index()
-    )
-    X_mean = proj.fit_transform(np.stack(pop_mean[response]))
+#     # aggregate population data and apply MDS transformation
+#     proj = MDS(n_components=2, n_init=64, max_iter=2400, n_jobs=n_jobs)
+#     pop_mean = (
+#         data.groupby([unit] + condition)[response]
+#         .mean()
+#         .groupby(condition)
+#         .agg(list)
+#         .reset_index()
+#     )
+#     X_mean = proj.fit_transform(np.stack(pop_mean[response]))
 
-    # generate plotting styles
-    y = pop_mean[condition].to_numpy(dtype=str)
-    offset, colors_lv1 = 0, None
+#     # generate plotting styles
+#     y = pop_mean[condition].to_numpy(dtype=str)
+#     offset, colors_lv1 = 0, None
 
-    # define color for first level of condition (if applicable)
-    if len(condition) > 1:
-        u_lv1, _ = np.unique(y[:, 0], return_inverse=True)
-        offset = len(u_lv1)
-        colors_lv1 = {u: cmap(i) for i, u in enumerate(u_lv1)}
+#     # define color for first level of condition (if applicable)
+#     if len(condition) > 1:
+#         u_lv1, _ = np.unique(y[:, 0], return_inverse=True)
+#         offset = len(u_lv1)
+#         colors_lv1 = {u: cmap(i) for i, u in enumerate(u_lv1)}
 
-    # define color for all conditions
-    start = 0 if len(condition) == 1 else 1
-    _, l_all = np.unique(y[:, start:], return_inverse=True, axis=0)
-    colors_all = [cmap(l + offset) for l in l_all]
+#     # define color for all conditions
+#     start = 0 if len(condition) == 1 else 1
+#     _, l_all = np.unique(y[:, start:], return_inverse=True, axis=0)
+#     colors_all = [cmap(l + offset) for l in l_all]
 
-    # set up the figure
-    xmin, xmax = np.min(X_mean[:, 0]), np.max(X_mean[:, 0])
-    ymin, ymax = np.min(X_mean[:, 1]), np.max(X_mean[:, 1])
-    max_val = max(xmax - xmin, ymax - ymin)
+#     # set up the figure
+#     xmin, xmax = np.min(X_mean[:, 0]), np.max(X_mean[:, 0])
+#     ymin, ymax = np.min(X_mean[:, 1]), np.max(X_mean[:, 1])
+#     max_val = max(xmax - xmin, ymax - ymin)
 
-    # plot edges
-    if len(condition) > 1:
-        edge_sets = defaultdict(list)
-        for i, j in combinations(range(len(y)), 2):
-            li, lj = y[i], y[j]
-            Xi, Xj = X_mean[i], X_mean[j]
-            if li[0] != lj[0] and np.all(li[1:] == lj[1:]):
-                ax.plot([Xi[0], Xj[0]], [Xi[1], Xj[1]], color=(1, 1, 1), alpha=0.25)
-            # elif li[0] == lj[0] and np.sum(li[1:] == lj[1:]) == 1:
-            elif li[0] == lj[0]:
-                edge_sets[li[0]].extend([Xi, Xj])
-                ax.plot([Xi[0], Xj[0]], [Xi[1], Xj[1]], color=colors_lv1[li[0]])
-    else:
-        edge_sets = defaultdict(list)
-        for i, j in combinations(range(len(y)), 2):
-            li, lj = y[i], y[j]
-            Xi, Xj = X_mean[i], X_mean[j]
-            ax.plot([Xi[0], Xj[0]], [Xi[1], Xj[1]], color=(1, 1, 1), alpha=0.25)
+#     # plot edges
+#     if len(condition) > 1:
+#         edge_sets = defaultdict(list)
+#         for i, j in combinations(range(len(y)), 2):
+#             li, lj = y[i], y[j]
+#             Xi, Xj = X_mean[i], X_mean[j]
+#             if li[0] != lj[0] and np.all(li[1:] == lj[1:]):
+#                 ax.plot([Xi[0], Xj[0]], [Xi[1], Xj[1]], color=(1, 1, 1), alpha=0.25)
+#             # elif li[0] == lj[0] and np.sum(li[1:] == lj[1:]) == 1:
+#             elif li[0] == lj[0]:
+#                 edge_sets[li[0]].extend([Xi, Xj])
+#                 ax.plot([Xi[0], Xj[0]], [Xi[1], Xj[1]], color=colors_lv1[li[0]])
+#     else:
+#         edge_sets = defaultdict(list)
+#         for i, j in combinations(range(len(y)), 2):
+#             li, lj = y[i], y[j]
+#             Xi, Xj = X_mean[i], X_mean[j]
+#             ax.plot([Xi[0], Xj[0]], [Xi[1], Xj[1]], color=(1, 1, 1), alpha=0.25)
 
-    # plot points
-    for i in range(len(X_mean)):
-        ax.plot(*X_mean[i], "o", color=colors_all[i])
+#     # plot points
+#     for i in range(len(X_mean)):
+#         ax.plot(*X_mean[i], "o", color=colors_all[i])
 
-    # add legend
-    ax.axis("off")
-    if len(condition) > 2:
-        for k, v in colors_lv1.items():
-            ax.plot([], [], lw=5, color=v, label=k)
-    elif len(condition) > 1:
-        for k, v in colors_lv1.items():
-            ax.plot([], [], color=v, label=k)
-    for i, label in enumerate(y[:, start:]):
-        ax.plot([], [], "o", color=colors_all[i], label=" × ".join(label))
-    remove_duplicate_legend_entries(ax)
-    sns.move_legend(ax, loc="upper left", bbox_to_anchor=(1, 1), frameon=False)
+#     # add legend
+#     ax.axis("off")
+#     if len(condition) > 2:
+#         for k, v in colors_lv1.items():
+#             ax.plot([], [], lw=5, color=v, label=k)
+#     elif len(condition) > 1:
+#         for k, v in colors_lv1.items():
+#             ax.plot([], [], color=v, label=k)
+#     for i, label in enumerate(y[:, start:]):
+#         ax.plot([], [], "o", color=colors_all[i], label=" × ".join(label))
+#     remove_duplicate_legend_entries(ax)
+#     sns.move_legend(ax, loc="upper left", bbox_to_anchor=(1, 1), frameon=False)
 
-    return ax
+#     return ax
 
 
 def plot_dendrogram(
