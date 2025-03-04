@@ -9,7 +9,6 @@ def poisson_wald(
     data: pd.DataFrame,
     formula: str,
     n_permutes: int = 1024,
-    alpha: float = 0.05,
     n_jobs: int = -1,
 ):
 
@@ -37,10 +36,8 @@ def poisson_wald(
             for term in results.index
         ]
 
-    # assign significance
-    results["is_significant"] = results["pvalue"] < alpha
+    # return results
     results = results.reset_index(names="predictor")
-
     return results[results["predictor"] != "Intercept"]
 
 

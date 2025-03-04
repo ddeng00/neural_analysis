@@ -357,24 +357,27 @@ def plot_PSTH(
     if group_labels is not None and sig_test:
         y_max = ax.get_ylim()[1]
 
-        def _helper(permute):
+        def _helper(permute, mask=None):
             srs = np.random.permutation(spike_rates) if permute else spike_rates
-            pvals = []
-            for rate in srs.T:
+            pvals = np.zeros(srs.shape[1])
+            for i, rate in enumerate(srs.T):
+                if mask is not None and not mask[i]:
+                    continue
                 d = {"y": rate, "x": group_labels, "trial": np.arange(len(rate))}
                 model = smf.glm("y ~ x + trial", data=d, family=sm.families.Poisson())
                 try:
                     wald = model.fit().wald_test_terms(scalar=True)
-                    pvals.append(wald.table.loc["x", "pvalue"])
+                    pvals[i] = wald.table.loc["x", "pvalue"]
                 except:
-                    pvals.append(np.nan)
-            return np.array(pvals)
+                    pvals[i] = np.nan
+            return pvals
 
         pvals = _helper(False)
+        mask = pvals < 0.1
         if n_permutes > 0:
             null = list(
                 Parallel(n_jobs=n_jobs)(
-                    delayed(_helper)(True) for _ in range(n_permutes)
+                    delayed(_helper)(True, mask) for _ in range(n_permutes)
                 )
             )
             null = np.array(null)
