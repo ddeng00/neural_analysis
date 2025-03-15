@@ -6,8 +6,52 @@ import re
 
 import numpy as np
 import numpy.typing as npt
+import pandas as pd
 from scipy.io import loadmat
 from scipy.spatial.distance import pdist, squareform
+from scipy.cluster.hierarchy import linkage, dendrogram, optimal_leaf_ordering
+
+
+def anscombe_transform(x: npt.ArrayLike) -> np.ndarray:
+    """
+    Apply the Anscombe transform to a set of values.
+
+    Parameters
+    ----------
+    x : numpy.ndarray
+        Array of values to be transformed.
+
+    Returns
+    -------
+    numpy.ndarray
+        Transformed values.
+    """
+    return 2 * np.sqrt(np.asarray(x) + 3 / 8)
+
+
+def seriate(dist_mat: npt.ArrayLike | pd.DataFrame) -> np.ndarray | pd.DataFrame:
+    """
+    Seriate a distance matrix using the Optimal Leaf Ordering method.
+
+    Parameters
+    ----------
+    dist_mat : numpy.ndarray
+        A square distance matrix.
+
+    Returns
+    -------
+    numpy.ndarray or pandas.DataFrame
+        A seriated distance matrix.
+    """
+    if not isinstance(dist_mat, pd.DataFrame):
+        dist_mat = np.asarray(dist_mat)
+    condensed = squareform(dist_mat)
+    linkage_matrix = linkage(condensed, method="average")
+    linkage_matrix = optimal_leaf_ordering(linkage_matrix, condensed)
+    order = dendrogram(linkage_matrix, no_plot=True)["leaves"]
+    if isinstance(dist_mat, pd.DataFrame):
+        return dist_mat.iloc[order, order]
+    return dist_mat[order][:, order]
 
 
 def powerset(iterable: Iterable) -> Iterable:

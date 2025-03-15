@@ -4,31 +4,65 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from joblib import Parallel, delayed
 
+from ..statistics import likelihood_ratio_test
 
-def poisson_wald(
+
+def glm_test(
     data: pd.DataFrame,
     formula: str,
-    n_permutes: int = 1024,
+    maxiter: int = 100,
+    n_permutes: int = 0,
     n_jobs: int = -1,
 ):
 
     # define GLM and helper function
     response = formula.split("~")[0].strip()
 
-    def _helper(permute):
-        df = data.copy()
+    # define nested formulae
+    terms = smf.glm(formula=formula, data=data).data.design_info.term_names
+    terms = sorted(terms, key=len)
+    terms_spilt = np.array([set(t.split(":")) for t in terms])
+    held_out = {}
+    for i, term in enumerate(terms):
+        if term == "Intercept":
+            continue
+        sel_inds = np.argwhere(terms_spilt[i:] >= terms_spilt[i]).ravel() + i
+        other_inds = set(range(len(terms))) - set(sel_inds)
+        formula_res = f"{response} ~ {' + '.join(terms[j] for j in other_inds)}"
+        held_out[term] = formula_res.replace("Intercept", "")
+
+    # define helper function
+    def glm_helper(permute):
         if permute:
+            df = data.copy()
             df[response] = np.random.permutation(df[response].values)
-        model = smf.glm(formula=formula, data=df, family=sm.families.Poisson())
-        return model.fit().wald_test_terms(scalar=True).table
+        else:
+            df = data
+        model = smf.poisson(formula=formula, data=df).fit(disp=0, maxiter=maxiter)
+        llr_full, df_full = model.llf, model.df_model
+        aic, bic = model.aic, model.bic
+
+        results = {}
+        for term, formula_res in held_out.items():
+            model = smf.poisson(formula=formula_res, data=df).fit(
+                disp=0, maxiter=maxiter
+            )
+            llr_restr, df_restr = model.llf, model.df_model
+            results[term] = likelihood_ratio_test(
+                llr_full, llr_restr, df_full, df_restr
+            )
+        results = pd.DataFrame(results).T
+        return results.assign(aic=aic, bic=bic)
 
     # get baseline statistics
-    results = _helper(False)
+    results = glm_helper(False)
 
     # compute permutation statistics
     if n_permutes > 0:
         null = list(
-            Parallel(n_jobs=n_jobs)(delayed(_helper)(True) for _ in range(n_permutes))
+            Parallel(n_jobs=n_jobs)(
+                delayed(glm_helper)(True) for _ in range(n_permutes)
+            )
         )
         null = pd.concat(null)
         results["pvalue"] = [
@@ -37,8 +71,7 @@ def poisson_wald(
         ]
 
     # return results
-    results = results.reset_index(names="predictor")
-    return results[results["predictor"] != "Intercept"]
+    return results.reset_index(names="predictor")
 
 
 # def get_single_trial_latencies(

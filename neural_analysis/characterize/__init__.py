@@ -6,4 +6,4 @@ from .population import (
     IndependentSamplesCCGP,
     PS,
 )
-from .single_unit import poisson_wald
+from .single_unit import glm_test
