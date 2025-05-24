@@ -121,32 +121,15 @@ class _BaseEstimator(ABC):
         # define dichotomies
         u_conds = data[condition].drop_duplicates().values
         dichots, dichot_names, dichot_diffs = make_balanced_dichotomies(
-            u_conds, cond_names=condition, return_one_sided=True
+            u_conds,
+            cond_names=condition,
+            return_one_sided=True,
+            dichot_map=dichot_map,
+            named_only=named_only,
         )
         self.dichotomies = dichots
         self.dichotomy_names = dichot_names
         self.dichotomy_difficulties = dichot_diffs
-
-        # assign additional dichotomies
-        if dichot_map is not None:
-            for dichot_name, dichot in dichot_map.items():
-                for i, d in enumerate(self.dichotomies):
-                    if all(isin_2d(d, dichot)) or not any(isin_2d(d, dichot)):
-                        self.dichotomy_names[i] = dichot_name
-                        break
-
-        # remove irrelevant dichotomies
-        if named_only:
-            sel_inds = [
-                i
-                for i, name in enumerate(self.dichotomy_names)
-                if "unnamed_" not in name
-            ]
-            self.dichotomies = [self.dichotomies[i] for i in sel_inds]
-            self.dichotomy_names = [self.dichotomy_names[i] for i in sel_inds]
-            self.dichotomy_difficulties = [
-                self.dichotomy_difficulties[i] for i in sel_inds
-            ]
 
         # store data
         self.data = data

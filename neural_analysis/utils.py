@@ -12,6 +12,52 @@ from scipy.spatial.distance import pdist, squareform
 from scipy.cluster.hierarchy import linkage, dendrogram, optimal_leaf_ordering
 
 
+def remove_patsy_subterms(terms: list[str]) -> list[str]:
+    """
+    Remove subterms from a list of Patsy terms.
+
+    Parameters
+    ----------
+    terms : list of str
+        List of Patsy terms to be processed.
+
+    Returns
+    -------
+    list of str
+        List of Patsy terms with subterms removed.
+    """
+
+    rem_terms, final_terms = list(terms), []
+    while len(rem_terms) > 0:
+        term = rem_terms[-1]
+        final_terms.append(term)
+        subterms = [":".join(subterm) for subterm in powerset(term.split(":"))]
+        rem_terms = [t for t in rem_terms if t not in subterms]
+    return final_terms[::-1]
+
+
+def sanitize_patsy_terms(terms: list[str]) -> list[str]:
+    """
+    Sanitize Patsy terms by removing the 'C()' prefix and any additional information.
+
+    Parameters
+    ----------
+    terms : list of str
+        List of Patsy terms to be sanitized.
+
+    Returns
+    -------
+    list of str
+        Sanitized Patsy terms.
+    """
+
+    terms = [t.split("[")[0] for t in terms]
+    return [
+        t.split(",")[0].strip().replace("C(", "").replace("I(", "").replace(")", "")
+        for t in terms
+    ]
+
+
 def anscombe_transform(x: npt.ArrayLike) -> np.ndarray:
     """
     Apply the Anscombe transform to a set of values.
@@ -29,7 +75,9 @@ def anscombe_transform(x: npt.ArrayLike) -> np.ndarray:
     return 2 * np.sqrt(np.asarray(x) + 3 / 8)
 
 
-def seriate(dist_mat: npt.ArrayLike | pd.DataFrame) -> np.ndarray | pd.DataFrame:
+def seriate(
+    dist_mat: npt.ArrayLike | pd.DataFrame, order_only: bool = False
+) -> np.ndarray | pd.DataFrame:
     """
     Seriate a distance matrix using the Optimal Leaf Ordering method.
 
@@ -49,6 +97,8 @@ def seriate(dist_mat: npt.ArrayLike | pd.DataFrame) -> np.ndarray | pd.DataFrame
     linkage_matrix = linkage(condensed, method="average")
     linkage_matrix = optimal_leaf_ordering(linkage_matrix, condensed)
     order = dendrogram(linkage_matrix, no_plot=True)["leaves"]
+    if order_only:
+        return order
     if isinstance(dist_mat, pd.DataFrame):
         return dist_mat.iloc[order, order]
     return dist_mat[order][:, order]
@@ -305,6 +355,7 @@ def create_rolling_window(
     starts, ends, centers = [], [], []
     half_width = width / 2
 
+    stop += 1e-6  # To ensure the last window is included
     while center <= stop:
         w_start = center - half_width
         w_end = center + half_width

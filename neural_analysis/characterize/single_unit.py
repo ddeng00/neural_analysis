@@ -1,77 +1,153 @@
+from itertools import combinations
+
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
-import statsmodels.formula.api as smf
 from joblib import Parallel, delayed
+from patsy import dmatrices
 
 from ..statistics import likelihood_ratio_test
+from ..utils import sanitize_patsy_terms
 
 
 def glm_test(
     data: pd.DataFrame,
     formula: str,
+    alpha: float = 0.1,
     maxiter: int = 100,
     n_permutes: int = 0,
+    pairwise: bool = True,
     n_jobs: int = -1,
 ):
 
-    # define GLM and helper function
-    response = formula.split("~")[0].strip()
+    # preprocess input
+    data = data.reset_index(drop=True)
+    y, X = dmatrices(formula, data, return_type="dataframe")
+    endog = y.columns[0]
 
-    # define nested formulae
-    terms = smf.glm(formula=formula, data=data).data.design_info.term_names
-    terms = sorted(terms, key=len)
-    terms_spilt = np.array([set(t.split(":")) for t in terms])
-    held_out = {}
-    for i, term in enumerate(terms):
-        if term == "Intercept":
+    # define restricted models
+    terms = sanitize_patsy_terms(X.design_info.term_name_slices.keys())
+    slices = list(X.design_info.term_name_slices.values())
+    term_sets = np.array([set(t.split(":")) for t in terms])
+    restr = {}
+    for term, term_set in zip(terms, term_sets):
+        if "Intercept" in term_set:
             continue
-        sel_inds = np.argwhere(terms_spilt[i:] >= terms_spilt[i]).ravel() + i
-        other_inds = set(range(len(terms))) - set(sel_inds)
-        formula_res = f"{response} ~ {' + '.join(terms[j] for j in other_inds)}"
-        held_out[term] = formula_res.replace("Intercept", "")
+        res_mask = np.ones(X.shape[1], dtype=bool)
+        full_mask = np.ones(X.shape[1], dtype=bool)
+        for s in np.take(slices, np.where(term_sets >= term_set)[0]):
+            res_mask[s] = False
+        for s in np.take(slices, np.where(term_sets > term_set)[0]):
+            full_mask[s] = False
+        restr[term] = res_mask, full_mask
 
     # define helper function
+    glm = lambda x, y: sm.Poisson(x, y).fit(
+        disp=0, maxiter=maxiter, warn_convergence=False, cov_type="HC0", use_t=True
+    )
+
     def glm_helper(permute):
+
+        # permute data if necessary
+        yy = y.sample(frac=1, ignore_index=True) if permute else y
+
+        # compute total effects of predictors
+        model = glm(yy, X)
+        total_effects = []
+        for term, (res_mask, full_mask) in restr.items():
+            try:
+                model_res = glm(yy, X.loc[:, res_mask])
+                model_full = model if all(full_mask) else glm(yy, X.loc[:, full_mask])
+                results = likelihood_ratio_test(
+                    model_full.llf,
+                    model_res.llf,
+                    model_full.df_model,
+                    model_res.df_model,
+                )
+                total_effects.append({"predictor": term, "pvalue": results["pvalue"]})
+            except Exception as e:
+                print(f"Error in {term}: {e}")
+                total_effects.append({"predictor": term})
+
+        # finalize results
         if permute:
-            df = data.copy()
-            df[response] = np.random.permutation(df[response].values)
-        else:
-            df = data
-        model = smf.poisson(formula=formula, data=df).fit(disp=0, maxiter=maxiter)
-        llr_full, df_full = model.llf, model.df_model
-        aic, bic = model.aic, model.bic
+            return pd.DataFrame(total_effects)
+        return pd.DataFrame(total_effects), model
 
-        results = {}
-        for term, formula_res in held_out.items():
-            model = smf.poisson(formula=formula_res, data=df).fit(
-                disp=0, maxiter=maxiter
-            )
-            llr_restr, df_restr = model.llf, model.df_model
-            results[term] = likelihood_ratio_test(
-                llr_full, llr_restr, df_full, df_restr
-            )
-        results = pd.DataFrame(results).T
-        return results.assign(aic=aic, bic=bic)
+    # get effets of full model
+    total_effects, model = glm_helper(False)
+    total_effects["model_pvalue"] = model.llr_pvalue
+    if np.isnan(model.llr_pvalue):
+        return {"total_effects": total_effects}
 
-    # get baseline statistics
-    results = glm_helper(False)
-
-    # compute permutation statistics
+    # perform permutation testing
     if n_permutes > 0:
-        null = list(
+        null = pd.concat(
             Parallel(n_jobs=n_jobs)(
                 delayed(glm_helper)(True) for _ in range(n_permutes)
             )
         )
-        null = pd.concat(null)
-        results["pvalue"] = [
-            (null.loc[term, "statistic"] <= results.loc[term, "statistic"]).mean()
-            for term in results.index
-        ]
+        total_effects["pvalue_orig"] = total_effects["pvalue"]
+        total_effects["pvalue"] = total_effects[["predictor", "pvalue"]].apply(
+            lambda x: (
+                null.loc[null["predictor"] == x["predictor"], "pvalue"] <= x["pvalue"]
+            ).mean(),
+            axis=1,
+        )
+    total_effects = total_effects.set_index("predictor")
 
-    # return results
-    return results.reset_index(names="predictor")
+    # check if further testing is necessary
+    if not pairwise:
+        return total_effects
+    if np.isnan(model.llr_pvalue) or model.llr_pvalue > alpha:
+        return {"total_effects": total_effects, "pairwise_effects": None}
+    if total_effects["pvalue"].min() > alpha:
+        return {"total_effects": total_effects, "pairwise_effects": None}
+
+    # pairwise comparisons for significant predictors
+    pairwise_effects = []
+    cond_aves = X.mean(axis=0)
+    for term in total_effects.index[total_effects["pvalue"] <= alpha]:
+
+        # identify covariates
+        subterms = term.split(":")
+        cov_mask = np.ones(X.shape[1], dtype=bool)
+        for t in subterms:
+            cov_mask[slices[terms.index(t)]] = False
+
+        # get per group averages
+        grps, yy, sel_inds = [], [], []
+        for grp, inds in data.groupby(subterms).groups.items():
+            grps.append(grp)
+            ym = np.mean(y.iloc[inds])
+            yy.append(np.log(ym) if ym > 0 else np.nan)
+            sel_inds.append(inds[0])
+        yy = np.array(yy)
+        XX = X.iloc[sel_inds].reset_index(drop=True)
+        XX.loc[:, cov_mask] = cond_aves[cov_mask].values
+        for col in XX:
+            if ":" in col:
+                XX[col] = XX[col.split(":")].prod(axis=1)
+
+        # perform t-tests on all pairwise contrasts
+        left_inds, right_inds = np.array(list(combinations(range(len(grps)), 2))).T
+        contrasts = XX.iloc[left_inds] - XX.iloc[right_inds].values
+        contrasts = model.t_test(contrasts).summary_frame()
+
+        # process results
+        contrasts = contrasts[["coef", "std err", "P>|t|"]].reset_index(drop=True)
+        contrasts.columns = ["diff", "se", "pvalue"]
+        contrasts["predictor"] = term
+        contrasts["c0"] = [grps[i] for i in left_inds]
+        contrasts["c1"] = [grps[i] for i in right_inds]
+        contrasts["diff_gt"] = yy[left_inds] - yy[right_inds]
+        pairwise_effects.append(contrasts)
+
+    pairwise_effects = pd.concat(pairwise_effects).reset_index(drop=True)
+    return {
+        "total_effects": total_effects.reset_index(),
+        "pairwise_effects": pairwise_effects,
+    }
 
 
 # def get_single_trial_latencies(

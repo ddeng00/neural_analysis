@@ -15,6 +15,7 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import MDS
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+
 # from mayavi import mlab
 from scipy.spatial import ConvexHull
 from sklearn.cluster import AgglomerativeClustering
@@ -363,11 +364,9 @@ def plot_PSTH(
             for i, rate in enumerate(srs.T):
                 if mask is not None and not mask[i]:
                     continue
-                d = {"y": rate, "x": group_labels, "trial": np.arange(len(rate))}
-                model = smf.glm("y ~ x + trial", data=d, family=sm.families.Poisson())
+                model = smf.poisson("y ~ x", data={"y": rate, "x": group_labels})
                 try:
-                    wald = model.fit().wald_test_terms(scalar=True)
-                    pvals[i] = wald.table.loc["x", "pvalue"]
+                    pvals[i] = model.fit(disp=0).llr_pvalue
                 except:
                     pvals[i] = np.nan
             return pvals
