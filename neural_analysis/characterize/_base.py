@@ -622,7 +622,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
 
         # infer number of samples per condition if not provided
         if n_samples_per_cond is None:
-            n_samples_per_cond = [d.gropuby(condition).size().min() for d in data]
+            n_samples_per_cond = [d.groupby(condition).size().min() for d in data]
         elif isinstance(n_samples_per_cond, int):
             n_samples_per_cond = [n_samples_per_cond] * len(data)
         else:
