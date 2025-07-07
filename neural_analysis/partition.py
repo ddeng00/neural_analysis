@@ -88,7 +88,7 @@ def make_balanced_dichotomies(
     # assign additional dichotomies
     if dichot_map is not None:
         for dichot_name, dichot in dichot_map.items():
-            for i, d in enumerate(dichotomies):
+            for i, d in enumerate(one_sided):
                 if all(isin_2d(d, dichot)) or not any(isin_2d(d, dichot)):
                     dich_names[i] = dichot_name
 
