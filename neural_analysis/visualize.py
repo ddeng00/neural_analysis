@@ -30,6 +30,62 @@ from .spikes import get_spikes, compute_spike_rates
 from .utils import create_rolling_window
 
 
+def polar_histogram(
+    x: npt.ArrayLike,
+    bins: int = 16,
+    density: bool = True,
+    offset: float = 0,
+    ax: plt.Axes | None = None,
+    **kwargs,
+) -> plt.Axes:
+    """
+    Create a polar histogram.
+
+    Parameters
+    ----------
+    x : array-like
+        Input data.
+    bins : int, optional
+        Number of bins to use for the histogram.
+    density : bool, optional
+        If True, the histogram is normalized to form a probability density.
+    offset : float, optional
+        Offset angle for the bars.
+    ax : matplotlib.axes.Axes, optional
+        Axes object to draw the histogram onto.
+    **kwargs : keyword arguments
+        Additional arguments passed to the bar function.
+
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+        The Axes object with the polar histogram.
+    """
+
+    # Create a new figure if no Axes object is provided
+    if ax is None:
+        _, ax = plt.subplots(subplot_kw={"projection": "polar"})
+
+    # Warp input to [-pi, pi]
+    x = np.asarray(x)
+    x = (x + np.pi) % (2 * np.pi) - np.pi
+
+    # Compute histogram
+    n, bins = np.histogram(x, bins=np.linspace(-np.pi, np.pi, bins + 1))
+    widths = np.diff(bins)
+    if density:
+        area = n / x.size
+        radius = (area / np.pi) ** 0.5
+    else:
+        radius = n
+    ax.bar(bins[:-1], radius, align="edge", width=widths, **kwargs)
+    ax.set_theta_offset(offset)
+    if density:
+        ax.set_yticks([])
+
+    return ax
+
+
 def plot_dropout(
     data: pd.DataFrame,
     unit: str,

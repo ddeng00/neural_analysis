@@ -76,32 +76,79 @@ def anscombe_transform(x: npt.ArrayLike) -> np.ndarray:
 
 
 def seriate(
-    dist_mat: npt.ArrayLike | pd.DataFrame, order_only: bool = False
+    mat: np.ndarray | pd.DataFrame,
+    order_only: bool = False,
 ) -> np.ndarray | pd.DataFrame:
     """
-    Seriate a distance matrix using the Optimal Leaf Ordering method.
+    Seriate a square symmetric matrix using Optimal Leaf Ordering.
+
+    This will accept either:
+      - a distance matrix (non-negative, zero diagonal), or
+      - a similarity matrix (any real values, symmetry enforced).
+
+    If you pass a similarity matrix, it will be converted to a
+    distance by: D = max(S) - S, with zeros on the diagonal.
 
     Parameters
     ----------
-    dist_mat : numpy.ndarray
-        A square distance matrix.
+    mat : numpy.ndarray or pandas.DataFrame
+        A square symmetric matrix (distance or similarity).
+    order_only : bool, default False
+        If True, return only the leaf ordering (list of indices).
 
     Returns
     -------
-    numpy.ndarray or pandas.DataFrame
-        A seriated distance matrix.
+    order : List[int], if order_only=True
+        The seriation order.
+    reordered_mat : numpy.ndarray or pandas.DataFrame
+        The matrix reordered according to the optimal leaf order.
+        If input was a DataFrame, indices and columns are preserved.
     """
-    if not isinstance(dist_mat, pd.DataFrame):
-        dist_mat = np.asarray(dist_mat)
-    condensed = squareform(dist_mat)
-    linkage_matrix = linkage(condensed, method="average")
-    linkage_matrix = optimal_leaf_ordering(linkage_matrix, condensed)
-    order = dendrogram(linkage_matrix, no_plot=True)["leaves"]
+    # Pull out labels if it's a DataFrame
+    if isinstance(mat, pd.DataFrame):
+        labels = (mat.index.tolist(), mat.columns.tolist())
+        arr = mat.values
+    else:
+        labels = None
+        arr = np.asarray(mat)
+
+    # Basic sanity checks
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+        raise ValueError("Input must be a square matrix.")
+    if not np.allclose(arr, arr.T, atol=1e-8):
+        raise ValueError("Input matrix must be symmetric.")
+
+    # Determine if this is already a distance matrix
+    is_distance = np.all(arr >= 0) and np.allclose(np.diag(arr), 0, atol=1e-8)
+
+    if is_distance:
+        dist = arr.copy()
+    else:
+        # Treat as similarity: convert to distance
+        max_val = np.nanmax(arr)
+        dist = max_val - arr
+        np.fill_diagonal(dist, 0.0)
+
+    # Condense and cluster
+    condensed = squareform(dist)
+    Z = linkage(condensed, method="average")
+    Z = optimal_leaf_ordering(Z, condensed)
+    order = dendrogram(Z, no_plot=True)["leaves"]
+
     if order_only:
         return order
-    if isinstance(dist_mat, pd.DataFrame):
-        return dist_mat.iloc[order, order]
-    return dist_mat[order][:, order]
+
+    # Reorder the matrix
+    reordered = arr[np.ix_(order, order)]
+
+    # If DataFrame, reattach labels
+    if labels is not None:
+        row_labels, col_labels = labels
+        new_idx = [row_labels[i] for i in order]
+        new_col = [col_labels[j] for j in order]
+        return pd.DataFrame(reordered, index=new_idx, columns=new_col)
+
+    return reordered
 
 
 def powerset(iterable: Iterable) -> Iterable:
@@ -324,7 +371,7 @@ def read_mat(path: Path | str) -> dict[str, list]:
 
 
 def create_rolling_window(
-    start: float, stop: float, step: float, width: float, exluce_oob=False
+    start: float, stop: float, step: float, width: float, exclude_oob=False
 ):
     """
     Generate rolling windows based on the given start and end times.
@@ -359,7 +406,7 @@ def create_rolling_window(
     while center <= stop:
         w_start = center - half_width
         w_end = center + half_width
-        if exluce_oob:
+        if exclude_oob:
             w_start = max(w_start, start)
             w_end = min(w_end, stop)
         starts.append(w_start)
@@ -421,3 +468,39 @@ def pvalue_to_decimal(pvalue: float, levels: list[float] = [0.05, 0.01, 0.001]) 
         if pvalue <= level:
             ret_val = "*" * (i + 1)
     return ret_val
+
+
+def polar_median_split(x: npt.ArrayLike) -> tuple[np.array, float]:
+    """
+    Split the input array into two groups based on the median angle after
+    minimizing the circular range.
+
+    Parameters
+    ----------
+    x : npt.ArrayLike
+        Input array of angles in radians.
+
+    Returns
+    -------
+    groups: numpy.ndarray
+        A boolean array indicating the group assignment.
+    median: float
+        The median angle of the split.
+    """
+
+    # Process input
+    x = np.asarray(x)
+
+    # Select offset minimizing polar range
+    best_offset, min_range = None, np.inf
+    for off in np.linspace(0, 2 * np.pi, 360):
+        shifted = (x - off) % (2 * np.pi)
+        r = shifted.max() - shifted.min()
+        if r < min_range:
+            min_range = r
+            best_offset = off
+
+    # Rotate by best offset
+    shifted = (x - best_offset) % (2 * np.pi)
+    med = np.median(shifted)
+    return shifted >= med, med
