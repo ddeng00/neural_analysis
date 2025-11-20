@@ -234,9 +234,9 @@ def plot_spikes(
 
     # Plot without grouping
     if group_labels is None:
-        ax.eventplot(spikes, linelengths=len(spikes) / 100)
+        ax.eventplot(spikes, linelengths=len(spikes) / 200)
         if plot_stats and stats is not None:
-            ax.plot(stats, np.arange(len(spikes)), color="black", lw=2)
+            ax.plot(stats, np.arange(len(spikes)), color="black", lw=2, alpha=0.5)
 
     # Plot with grouping
     else:
@@ -256,7 +256,7 @@ def plot_spikes(
         handles = [plt.Line2D([0], [0], color=c, lw=3) for c in cmap]
 
         # Plots
-        ax.eventplot(spikes, colors=colors, linelengths=len(spikes) / 100)
+        ax.eventplot(spikes, colors=colors, linelengths=len(spikes) / 150)
         ax.legend(handles[::-1], group_order)
         if plot_stats and stats is not None:
             start_ind = 0
@@ -268,6 +268,7 @@ def plot_spikes(
                     # color=cmap[i],
                     color="black",
                     lw=2,
+                    alpha=0.75,
                 )
                 start_ind = end_ind
 
@@ -278,6 +279,10 @@ def plot_spikes(
     ax.set_ylim(0, len(spikes))
 
     return ax
+
+
+# import fdr correction
+from statsmodels.stats.multitest import fdrcorrection
 
 
 def plot_PSTH(
@@ -332,6 +337,8 @@ def plot_PSTH(
     timestamps = np.asarray(timestamps)
     if smooth_width is not None:
         smooth_width /= timestamps[1] - timestamps[0]
+    if smooth_width is not None:
+        spike_rates = gaussian_filter1d(spike_rates, sigma=smooth_width)
 
     # Create a new figure if no Axes object is provided
     if ax is None:
@@ -367,13 +374,13 @@ def plot_PSTH(
     # Plot without grouping
     if group_labels is None:
         mean_rates = np.mean(spike_rates, axis=0)
-        if smooth_width is not None:
-            mean_rates = gaussian_filter1d(mean_rates, sigma=smooth_width)
+        # if smooth_width is not None:
+        #     mean_rates = gaussian_filter1d(mean_rates, sigma=smooth_width)
         ax.plot(timestamps, mean_rates)
         if error_type is not None:
             error_rates = error_func(spike_rates)
-            if smooth_width is not None:
-                error_rates = gaussian_filter1d(error_rates, sigma=smooth_width)
+            # if smooth_width is not None:
+            #     error_rates = gaussian_filter1d(error_rates, sigma=smooth_width)
             ax.fill_between(
                 timestamps,
                 mean_rates - error_rates,
@@ -391,13 +398,13 @@ def plot_PSTH(
         for k, (grp, grp_ind) in enumerate(zip(group_order, group_inds)):
             grp_rates = spike_rates[grp_ind]
             mean_rates = np.mean(grp_rates, axis=0)
-            if smooth_width is not None:
-                mean_rates = gaussian_filter1d(mean_rates, sigma=smooth_width)
+            # if smooth_width is not None:
+            #     mean_rates = gaussian_filter1d(mean_rates, sigma=smooth_width)
             ax.plot(timestamps, mean_rates, label=grp, color=colors[k])
             if error_type is not None:
                 error_rates = error_func(grp_rates)
-                if smooth_width is not None:
-                    error_rates = gaussian_filter1d(error_rates, sigma=smooth_width)
+                # if smooth_width is not None:
+                #     error_rates = gaussian_filter1d(error_rates, sigma=smooth_width)
                 ax.fill_between(
                     timestamps,
                     mean_rates - error_rates,
@@ -428,7 +435,7 @@ def plot_PSTH(
             return pvals
 
         pvals = _helper(False)
-        mask = pvals < 0.1
+        mask = pvals < 0.05
         if n_permutes > 0:
             null = list(
                 Parallel(n_jobs=n_jobs)(
@@ -485,6 +492,7 @@ def plot_spikes_with_PSTH(
     axes: tuple[plt.Axes, plt.Axes] | None = None,
     cmap: str | npt.ArrayLike | dict | mpl.colors.Colormap = "tab10",
     unit_conversion: float = 1,
+    alignment: str = "center",
     n_permutes: int = 0,
     n_jobs: int = -1,
 ) -> tuple[plt.Axes, plt.Axes]:
@@ -557,8 +565,8 @@ def plot_spikes_with_PSTH(
     trial_spikes = get_spikes(
         spikes, alignments + window[0], alignments + window[1], alignments
     )
-    w_starts, w_ends, w_centers = create_rolling_window(
-        window[0], window[1], step, width
+    w_starts, w_ends, w_refs = create_rolling_window(
+        window[0], window[1], step, width, alignment=alignment
     )
     trial_sr = np.array(
         [
@@ -584,7 +592,7 @@ def plot_spikes_with_PSTH(
     # Plot PSTH
     plot_PSTH(
         trial_sr,
-        w_centers,
+        w_refs,
         group_labels=group_labels,
         group_order=group_order,
         error_type=error_type,
@@ -632,6 +640,7 @@ def plot_metrics(
     marker: str = "o",
     chance: float | None = 0.5,
     palette: str | npt.ArrayLike | dict | mpl.colors.Colormap = "tab10",
+    markersize: int = 10,
     ax: plt.Axes | None = None,
     **kwargs,
 ):
@@ -658,7 +667,7 @@ def plot_metrics(
             hue_order=y_order,
             errorbar=None,
             markers=marker,
-            markersize=10,
+            markersize=markersize,
             markeredgecolor="black",
             lw=3,
             palette=palette,
@@ -698,7 +707,7 @@ def plot_metrics(
             hue_order=y_order,
             errorbar=None,
             markers=marker,
-            markersize=10,
+            markersize=markersize,
             markeredgecolor="black",
             lw=3,
             palette=palette,
@@ -729,7 +738,7 @@ def plot_metrics(
             y_min, y_max = min(y_min, low), max(y_max, high)
         else:
             labeled = False
-            null = null.groupby(x_group)[metric].quantile([0.05, 0.95]).unstack()
+            null = null.groupby(x_group)[metric].quantile([0.025, 0.975]).unstack()
             for grp, (low, high) in null.iterrows():
                 if grp not in x_order:
                     continue

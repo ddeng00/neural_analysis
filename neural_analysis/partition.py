@@ -75,13 +75,13 @@ def make_balanced_dichotomies(
     dich_names = []
     min_diff, max_diff = np.min(difficulties), np.max(difficulties)
     for i, (split, diff) in enumerate(zip(one_sided, difficulties)):
-        if diff == max_diff:
-            dich_names.append("XOR")
-        elif diff == min_diff:
+        if diff == min_diff:
             for j, cond in enumerate(cond_names):
                 if all(split[:, j] == split[0, j]):
                     dich_names.append(cond)
                     break
+        elif diff == max_diff:
+            dich_names.append("XOR")
         else:
             dich_names.append(f"unnamed_{i}")
 

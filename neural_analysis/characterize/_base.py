@@ -85,6 +85,7 @@ class _BaseEstimator(ABC):
 
         # remove irrelevant columns
         data = data[[unit] + response + condition]
+        data = data.infer_objects()
 
         # infer number of samples per condition if not provided
         if n_samples_per_cond is None:
@@ -609,6 +610,10 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
             condition = [condition]
         u_conds = data[condition].drop_duplicates().values
         self.n_init = data[unit].nunique()
+
+        # remove irrelevant columns
+        data = data[[unit] + [response] + condition + ([group] if group else [])]
+        data = data.infer_objects()
 
         # process sample groups
         tmp_data, tmp_grp = [], []

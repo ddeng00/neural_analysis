@@ -371,7 +371,12 @@ def read_mat(path: Path | str) -> dict[str, list]:
 
 
 def create_rolling_window(
-    start: float, stop: float, step: float, width: float, exclude_oob=False
+    start: float,
+    stop: float,
+    step: float,
+    width: float,
+    exclude_oob: bool = False,
+    alignment: str = "center",
 ):
     """
     Generate rolling windows based on the given start and end times.
@@ -388,6 +393,11 @@ def create_rolling_window(
         Size of each rolling window.
     exclude_oob : bool, default=False
         If True, adjust windows to stay within the bounds of the trials.
+    alignment : {"center", "left", "right"}, default="center"
+        Defines how the window is positioned relative to each step:
+        - "center": window is centered at the step.
+        - "left": window starts at the step.
+        - "right": window ends at the step.
 
     Returns
     -------
@@ -395,26 +405,42 @@ def create_rolling_window(
         A tuple containing:
         - Array of start times for each rolling window.
         - Array of end times for each rolling window.
-        - Array of center times for each rolling window.
+        - Array of labeled times for each rolling window.
     """
 
-    center = start
-    starts, ends, centers = [], [], []
-    half_width = width / 2
+    if alignment not in {"center", "left", "right"}:
+        raise ValueError("alignment must be one of {'center', 'left', 'right'}")
+
+    pos = start
+    starts, ends, labels = [], [], []
 
     stop += 1e-6  # To ensure the last window is included
-    while center <= stop:
-        w_start = center - half_width
-        w_end = center + half_width
+
+    while pos <= stop:
+        if alignment == "center":
+            w_start = pos - width / 2
+            w_end = pos + width / 2
+            ref = pos
+        elif alignment == "left":
+            w_start = pos
+            w_end = pos + width
+            ref = w_start
+        elif alignment == "right":
+            w_start = pos - width
+            w_end = pos
+            ref = w_end
+
         if exclude_oob:
             w_start = max(w_start, start)
             w_end = min(w_end, stop)
+
         starts.append(w_start)
         ends.append(w_end)
-        centers.append(center)
-        center += step
+        labels.append(ref)
 
-    return np.array(starts), np.array(ends), np.array(centers)
+        pos += step
+
+    return np.array(starts), np.array(ends), np.array(labels)
 
 
 def isin_2d(x1, x2):
