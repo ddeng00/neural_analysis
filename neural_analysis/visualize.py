@@ -223,7 +223,7 @@ def plot_spikes(
     # Create a new figure if no Axes object is provided
     if ax is None:
         _, ax = plt.subplots()
-    ax_h = ax.bbox.height / 5
+    ax_h = ax.bbox.height / 3
 
     # Sort spikes by stats
     if stats is not None:
@@ -235,13 +235,13 @@ def plot_spikes(
         if group_labels is not None:
             group_labels = group_labels[ind]
 
-    # Plot without grouping
+    # Plot spikes
+    linelengths = len(spikes) / ax_h
+    linewidths = 1
     if group_labels is None:
-        ax.eventplot(spikes, linelengths=len(spikes) / ax_h)
+        ax.eventplot(spikes, linelengths=linelengths, linewidths=linewidths)
         if plot_stats and stats is not None:
             ax.plot(stats, np.arange(len(spikes)), color="black", lw=1.5, alpha=0.75)
-
-    # Plot with grouping
     else:
         # order by group
         group_inds = [np.nonzero(group_labels == grp)[0] for grp in group_order[::-1]]
@@ -259,10 +259,26 @@ def plot_spikes(
         colors = np.concatenate(
             [[cmap[i]] * grp_len for i, grp_len in enumerate(group_lens) if grp_len > 0]
         )
-        handles = [plt.Line2D([0], [0], color=c, lw=3) for c in cmap]
+        handles = [
+            plt.Line2D(
+                [0], [0], marker="|", markersize=8, markeredgewidth=3.5, c=c, ls="None"
+            )
+            for c in cmap
+        ]
+
         # Plots
-        ax.eventplot(spikes, colors=colors, linelengths=len(spikes) / ax_h)
-        ax.legend(handles[::-1], group_order)
+        ax.eventplot(
+            spikes, colors=colors, linelengths=linelengths, linewidths=linewidths
+        )
+        ax.legend(
+            handles[::-1],
+            group_order,
+            loc="upper left",
+            bbox_to_anchor=(1, 1),
+            title=None,
+            frameon=False,
+        )
+
         if plot_stats and stats is not None:
             start_ind = 0
             for _, grp_len in enumerate(group_lens):
@@ -366,7 +382,7 @@ def plot_PSTH(
 
     # Plot significance
     if group_labels is not None and sig_test:
-        y_max = ax.get_ylim()[1]
+        y_min, y_max = ax.get_ylim()
         if raw_labels is None:
             raw_labels = group_labels
 
@@ -403,7 +419,8 @@ def plot_PSTH(
             null = np.array(null)
             pvals = (pvals >= null).mean(axis=0)
 
-        # # annotate significance
+        # annotate significance
+        ax_w = ax.bbox.width / 10
         mask = pvals < 0.05
         m = mask.astype(int)
         starts = np.where(np.diff(m) == 1)[0] + 1
@@ -413,14 +430,20 @@ def plot_PSTH(
         if mask[-1]:
             ends = np.r_[ends, len(mask)]
         for s, e in zip(starts, ends):
-            ax.plot(
-                [timestamps[s], timestamps[e - 1]],
-                [y_max, y_max],
-                color="r",
-                alpha=0.75,
-                lw=4,
+            xs = np.linspace(timestamps[s], timestamps[e - 1], 500)
+            ys = y_max + (y_max - y_min) * 0.01 * np.sin(ax_w * xs)
+            ax.plot(xs, ys, c="r", alpha=0.75, lw=3, solid_capstyle="round")
+        line = ax.add_line(
+            mpl.lines.Line2D(
+                [], [], marker=r"$〰$", c="r", ls="", markersize=16, alpha=0.75
             )
+        )
+        handles, labels = ax.get_legend_handles_labels()
+        handles.append(line)
+        labels.append("p < 0.05")
+        ax.legend(handles, labels)
 
+    sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1), title=None, frameon=False)
     return ax
 
 
@@ -561,19 +584,28 @@ def plot_spikes_with_PSTH(
     axes[1].set_xlim(*window)
     axes[0].get_xaxis().set_visible(False)
     axes[0].set_ylabel("Trial" if stats is None else "Trial (sorted)")
-    try:
+    if group_labels is not None:
         axes[1].get_legend().remove()
-    except AttributeError:
-        pass
+
+    if sig_test:
+        line = axes[1].add_line(
+            mpl.lines.Line2D(
+                [], [], marker=r"$〰$", c="r", ls="", markersize=16, alpha=0.75
+            )
+        )
+        axes[1].legend(
+            [line],
+            ["Ad-Hoc\n(p < 0.05)"],
+            loc="upper left",
+            bbox_to_anchor=(1, 1),
+            title=None,
+            frameon=False,
+        )
     axes[1].set_xlabel("Time [s]")
     axes[1].set_ylabel("Firing Rate [Hz]")
 
     sns.despine(ax=axes[0])
     sns.despine(ax=axes[1])
-    if axes[0].get_legend() is not None:
-        sns.move_legend(
-            axes[0], "upper left", bbox_to_anchor=(1, 1), title=None, frameon=False
-        )
 
     return axes
 
