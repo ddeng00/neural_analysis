@@ -1,3 +1,4 @@
+import warnings
 from collections import defaultdict
 from itertools import combinations
 
@@ -15,6 +16,7 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import MDS
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from statsmodels.tools.sm_exceptions import ConvergenceWarning
 
 # from mayavi import mlab
 from scipy.spatial import ConvexHull
@@ -221,6 +223,7 @@ def plot_spikes(
     # Create a new figure if no Axes object is provided
     if ax is None:
         _, ax = plt.subplots()
+    ax_h = ax.bbox.height / 5
 
     # Sort spikes by stats
     if stats is not None:
@@ -234,9 +237,9 @@ def plot_spikes(
 
     # Plot without grouping
     if group_labels is None:
-        ax.eventplot(spikes, linelengths=len(spikes) / 200)
+        ax.eventplot(spikes, linelengths=len(spikes) / ax_h)
         if plot_stats and stats is not None:
-            ax.plot(stats, np.arange(len(spikes)), color="black", lw=2, alpha=0.5)
+            ax.plot(stats, np.arange(len(spikes)), color="black", lw=1.5, alpha=0.75)
 
     # Plot with grouping
     else:
@@ -249,40 +252,37 @@ def plot_spikes(
             stats = stats[group_inds]
 
         # Define colors and legend handles
-        cmap = sns.color_palette(cmap, len(group_order))[::-1]
+        if isinstance(cmap, dict):
+            cmap = [cmap[grp] for grp in group_order[::-1]]
+        else:
+            cmap = sns.color_palette(cmap, len(group_order))[::-1]
         colors = np.concatenate(
-            [[cmap[i]] * grp_len for i, grp_len in enumerate(group_lens)]
+            [[cmap[i]] * grp_len for i, grp_len in enumerate(group_lens) if grp_len > 0]
         )
         handles = [plt.Line2D([0], [0], color=c, lw=3) for c in cmap]
-
         # Plots
-        ax.eventplot(spikes, colors=colors, linelengths=len(spikes) / 150)
+        ax.eventplot(spikes, colors=colors, linelengths=len(spikes) / ax_h)
         ax.legend(handles[::-1], group_order)
         if plot_stats and stats is not None:
             start_ind = 0
-            for i, grp_len in enumerate(group_lens):
+            for _, grp_len in enumerate(group_lens):
                 end_ind = start_ind + grp_len
                 ax.plot(
                     stats[start_ind:end_ind],
                     np.arange(grp_len) + start_ind,
-                    # color=cmap[i],
                     color="black",
-                    lw=2,
+                    lw=1.5,
                     alpha=0.75,
                 )
                 start_ind = end_ind
 
     # Plot zero line
-    ax.axvline(0, color="black", linestyle="--")
+    ax.axvline(0, color="black", linestyle="--", alpha=0.75)
 
     # Misc. settings
     ax.set_ylim(0, len(spikes))
 
     return ax
-
-
-# import fdr correction
-from statsmodels.stats.multitest import fdrcorrection
 
 
 def plot_PSTH(
@@ -291,13 +291,15 @@ def plot_PSTH(
     *,
     group_labels: npt.ArrayLike | None = None,
     group_order: npt.ArrayLike | None = None,
-    error_type: str | tuple[str, float] | None = ("ci", 95),
+    error_type: str | tuple[str, float] | None = "se",
     sig_test: bool = False,
+    raw_labels: npt.ArrayLike | None = None,
     smooth_width: float | None = None,
     ax: plt.Axes | None = None,
     cmap: str | npt.ArrayLike | dict | mpl.colors.Colormap = "tab10",
     n_permutes: int = 0,
     n_jobs: int = -1,
+    **kwargs,
 ) -> plt.Axes:
     """
     Plot peristimulus time histogram (PSTH).
@@ -331,95 +333,42 @@ def plot_PSTH(
         The Axes object containing the plot.
     """
 
+    # Preprocess data
     spike_rates = np.asarray(spike_rates)
     if timestamps is None:
         timestamps = np.arange(spike_rates.shape[1])
     timestamps = np.asarray(timestamps)
     if smooth_width is not None:
         smooth_width /= timestamps[1] - timestamps[0]
-    if smooth_width is not None:
-        spike_rates = gaussian_filter1d(spike_rates, sigma=smooth_width)
+        smoothed = gaussian_filter1d(spike_rates, sigma=smooth_width)
 
-    # Create a new figure if no Axes object is provided
-    if ax is None:
-        _, ax = plt.subplots()
-
-    # Process errorbar parameter
-    error_func = None
-    if error_type is not None:
-        if isinstance(error_type, str):
-            if error_type == "std":
-                error_func = lambda x: np.std(x, axis=0)
-            elif error_type == "sem":
-                error_func = lambda x: sem(x, axis=0)
-            elif error_type == "ci":
-                error_func = lambda x: compute_confidence_interval(
-                    x, confidence=0.95, axis=0
-                )
-            else:
-                raise ValueError("Unknown errorbar type.")
-        else:
-            etype, escale = error_type
-            if etype == "std":
-                error_func = lambda x: escale * np.std(x, axis=0)
-            elif etype == "sem":
-                error_func = lambda x: escale * sem(x, axis=0)
-            elif etype == "ci":
-                error_func = lambda x: compute_confidence_interval(
-                    x, confidence=escale / 100, axis=0
-                )
-            else:
-                raise ValueError("Unknown errorbar type.")
-
-    # Plot without grouping
-    if group_labels is None:
-        mean_rates = np.mean(spike_rates, axis=0)
-        # if smooth_width is not None:
-        #     mean_rates = gaussian_filter1d(mean_rates, sigma=smooth_width)
-        ax.plot(timestamps, mean_rates)
-        if error_type is not None:
-            error_rates = error_func(spike_rates)
-            # if smooth_width is not None:
-            #     error_rates = gaussian_filter1d(error_rates, sigma=smooth_width)
-            ax.fill_between(
-                timestamps,
-                mean_rates - error_rates,
-                mean_rates + error_rates,
-                alpha=0.2,
-            )
-
-    # Plot with grouping
-    else:
-        group_labels = np.asarray(group_labels)
-        colors = sns.color_palette(cmap, len(np.unique(group_labels)))
-        if group_order is None:
-            group_order = np.unique(group_labels)
-        group_inds = [np.nonzero(group_labels == grp)[0] for grp in group_order]
-        for k, (grp, grp_ind) in enumerate(zip(group_order, group_inds)):
-            grp_rates = spike_rates[grp_ind]
-            mean_rates = np.mean(grp_rates, axis=0)
-            # if smooth_width is not None:
-            #     mean_rates = gaussian_filter1d(mean_rates, sigma=smooth_width)
-            ax.plot(timestamps, mean_rates, label=grp, color=colors[k])
-            if error_type is not None:
-                error_rates = error_func(grp_rates)
-                # if smooth_width is not None:
-                #     error_rates = gaussian_filter1d(error_rates, sigma=smooth_width)
-                ax.fill_between(
-                    timestamps,
-                    mean_rates - error_rates,
-                    mean_rates + error_rates,
-                    alpha=0.2,
-                    color=colors[k],
-                )
-        ax.legend()
+    # Collect into dataframe
+    n, T = spike_rates.shape
+    sns.lineplot(
+        data={
+            "time": np.tile(timestamps, n),
+            "rate": (
+                spike_rates.flatten() if smooth_width is None else smoothed.flatten()
+            ),
+            "label": np.repeat(group_labels, T) if group_labels is not None else None,
+        },
+        x="time",
+        y="rate",
+        hue="label",
+        hue_order=group_order,
+        errorbar=error_type,
+        palette=cmap,
+        ax=ax,
+    )
 
     # Plot zero line
-    ax.axvline(0, color="black", linestyle="--")
+    ax.axvline(0, color="black", linestyle="--", alpha=0.75)
 
     # Plot significance
     if group_labels is not None and sig_test:
         y_max = ax.get_ylim()[1]
+        if raw_labels is None:
+            raw_labels = group_labels
 
         def _helper(permute, mask=None):
             srs = np.random.permutation(spike_rates) if permute else spike_rates
@@ -427,14 +376,23 @@ def plot_PSTH(
             for i, rate in enumerate(srs.T):
                 if mask is not None and not mask[i]:
                     continue
-                model = smf.poisson("y ~ x", data={"y": rate, "x": group_labels})
+                model = smf.glm(
+                    "y ~ x",
+                    data={"y": rate, "x": raw_labels},
+                    family=sm.families.Poisson(),
+                )
                 try:
-                    pvals[i] = model.fit(disp=0).llr_pvalue
+                    model = model.fit(scale="X2", disp=0, use_t=True)
+                    wald = model.wald_test_terms(scalar=True)
+                    pvals[i] = wald.pvalues[-1]
                 except:
                     pvals[i] = np.nan
             return pvals
 
-        pvals = _helper(False)
+        # compute p-values
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            pvals = _helper(False)
         mask = pvals < 0.05
         if n_permutes > 0:
             null = list(
@@ -445,32 +403,24 @@ def plot_PSTH(
             null = np.array(null)
             pvals = (pvals >= null).mean(axis=0)
 
-        sig_mask = pvals < 0.001
-        ax.plot(
-            timestamps[sig_mask],
-            [y_max] * np.sum(sig_mask),
-            ".",
-            color=(1, 0, 0),
-            zorder=100,
-        )
+        # # annotate significance
+        mask = pvals < 0.05
+        m = mask.astype(int)
+        starts = np.where(np.diff(m) == 1)[0] + 1
+        ends = np.where(np.diff(m) == -1)[0] + 1
+        if mask[0]:
+            starts = np.r_[0, starts]
+        if mask[-1]:
+            ends = np.r_[ends, len(mask)]
+        for s, e in zip(starts, ends):
+            ax.plot(
+                [timestamps[s], timestamps[e - 1]],
+                [y_max, y_max],
+                color="r",
+                alpha=0.75,
+                lw=4,
+            )
 
-        sig_mask = (0.001 <= pvals) & (pvals < 0.01)
-        ax.plot(
-            timestamps[sig_mask],
-            [y_max] * np.sum(sig_mask),
-            ".",
-            color=(1, 0.33, 0.33),
-            zorder=50,
-        )
-
-        sig_mask = (0.01 <= pvals) & (pvals < 0.05)
-        ax.plot(
-            timestamps[sig_mask],
-            [y_max] * np.sum(sig_mask),
-            ".",
-            color=(1, 0.67, 0.67),
-            zorder=0,
-        )
     return ax
 
 
@@ -488,6 +438,7 @@ def plot_spikes_with_PSTH(
     plot_stats: bool = False,
     error_type: str | tuple[str, float] | None = ("ci", 95),
     sig_test: bool = False,
+    raw_labels: npt.ArrayLike | None = None,
     smooth_width: float | None = None,
     axes: tuple[plt.Axes, plt.Axes] | None = None,
     cmap: str | npt.ArrayLike | dict | mpl.colors.Colormap = "tab10",
@@ -594,6 +545,7 @@ def plot_spikes_with_PSTH(
         trial_sr,
         w_refs,
         group_labels=group_labels,
+        raw_labels=raw_labels,
         group_order=group_order,
         error_type=error_type,
         sig_test=sig_test,
@@ -738,7 +690,7 @@ def plot_metrics(
             y_min, y_max = min(y_min, low), max(y_max, high)
         else:
             labeled = False
-            null = null.groupby(x_group)[metric].quantile([0.025, 0.975]).unstack()
+            null = null.groupby(x_group)[metric].quantile([0.05, 0.95]).unstack()
             for grp, (low, high) in null.iterrows():
                 if grp not in x_order:
                     continue
