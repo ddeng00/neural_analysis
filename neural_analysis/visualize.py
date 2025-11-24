@@ -430,14 +430,14 @@ def plot_PSTH(
         if mask[-1]:
             ends = np.r_[ends, len(mask)]
         for s, e in zip(starts, ends):
-            xs = np.linspace(timestamps[s], timestamps[e - 1], 500)
-            ys = y_max + (y_max - y_min) * 0.01 * np.sin(ax_w * xs)
-            ax.plot(xs, ys, c="r", alpha=0.75, lw=3, solid_capstyle="round")
-        line = ax.add_line(
-            mpl.lines.Line2D(
-                [], [], marker=r"$〰$", c="r", ls="", markersize=16, alpha=0.75
+            ax.plot(
+                [timestamps[s], timestamps[e - 1]],
+                [y_max, y_max],
+                c="r",
+                alpha=0.75,
+                lw=3,
             )
-        )
+        line = ax.add_line(mpl.lines.Line2D([0], [0], c="r", alpha=0.75))
         handles, labels = ax.get_legend_handles_labels()
         handles.append(line)
         labels.append("p < 0.05")
@@ -588,11 +588,7 @@ def plot_spikes_with_PSTH(
         axes[1].get_legend().remove()
 
     if sig_test:
-        line = axes[1].add_line(
-            mpl.lines.Line2D(
-                [], [], marker=r"$〰$", c="r", ls="", markersize=16, alpha=0.75
-            )
-        )
+        line = axes[1].add_line(mpl.lines.Line2D([0], [0], c="r", lw=3, alpha=0.75))
         axes[1].legend(
             [line],
             ["Ad-Hoc\n(p < 0.05)"],
