@@ -435,9 +435,9 @@ def plot_PSTH(
                 [y_max, y_max],
                 c="r",
                 alpha=0.75,
-                lw=3,
+                lw=4,
             )
-        line = ax.add_line(mpl.lines.Line2D([0], [0], c="r", alpha=0.75))
+        line = ax.add_line(mpl.lines.Line2D([0], [0], c="r", lw=3, alpha=0.75))
         handles, labels = ax.get_legend_handles_labels()
         handles.append(line)
         labels.append("p < 0.05")
