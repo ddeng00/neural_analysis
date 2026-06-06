@@ -1,6 +1,7 @@
 import numpy as np
 import numpy.typing as npt
 from scipy.stats import sem, t, chi2
+import statsmodels.api as sm
 
 
 def compute_confidence_interval(
@@ -65,3 +66,30 @@ def likelihood_ratio_test(
     statistic = -2 * (llf_restr - llf_full)
     pvalue = chi2.sf(statistic, df)
     return {"statistic": statistic, "pvalue": pvalue, "df_constraint": df}
+
+
+def empirical_pvalue(stats, kind="two-sided"):
+    stats = np.asarray(stats)
+    if kind == "greater":
+        stats = np.greater_equal(stats, stats[:, None])
+    elif kind == "less":
+        stats = np.less_equal(stats, stats[:, None])
+    elif kind == "two-sided":
+        stats = np.abs(stats)
+        stats = np.greater_equal(stats, stats[:, None])
+    return stats.sum(axis=1) / stats.shape[1]
+
+
+def residualize(Y, X, add_intercept=True):
+    Y = np.asarray(Y)
+    X = np.asarray(X)
+    y_was_1d = Y.ndim == 1
+    if y_was_1d:
+        Y = Y[:, None]
+    if X.ndim == 1:
+        X = X[:, None]
+    if add_intercept:
+        X = np.column_stack([np.ones(X.shape[0]), X])
+    beta, *_ = np.linalg.lstsq(X, Y, rcond=None)
+    resid = Y - X @ beta
+    return resid.ravel() if y_was_1d else resid

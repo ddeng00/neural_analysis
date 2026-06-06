@@ -530,3 +530,109 @@ def polar_median_split(x: npt.ArrayLike) -> tuple[np.array, float]:
     shifted = (x - best_offset) % (2 * np.pi)
     med = np.median(shifted)
     return shifted >= med, med
+
+
+def tag_events(
+    df,
+    events,
+    id_col=None,
+    time_col="timestamp [ns]",
+    start_col="start timestamp [ns]",
+    end_col="end timestamp [ns]",
+):
+    tagged = pd.merge_asof(
+        df,
+        events,
+        left_on=time_col,
+        right_on=start_col,
+        direction="backward",
+    )
+    mask = tagged[time_col].between(
+        tagged[start_col], tagged[end_col], inclusive="both"
+    )
+    tagged.loc[~mask, list(events.columns)] = np.nan
+    if id_col is not None:
+        if not isinstance(id_col, list):
+            id_col = [id_col]
+        tagged = tagged.drop(columns=list(events.columns.difference(id_col)))
+    return tagged
+
+
+def to_impulse(ts, event_ts, mode="nearest", tolerance=None):
+
+    # convert inputs
+    ref = np.asarray(ts)
+    events = np.asarray(event_ts)
+    if ref.ndim != 1:
+        raise ValueError("timestamps must be 1D")
+    if events.ndim != 1:
+        raise ValueError("events must be 1D")
+    impulses = np.zeros(len(ref), dtype=bool)
+
+    # process events
+    if mode == "exact":
+
+        lookup = {t: i for i, t in enumerate(ref)}
+
+        for t in events:
+            if t in lookup:
+                impulses[lookup[t]] = True
+
+        return impulses
+
+    elif mode == "nearest":
+
+        # insertion indices
+        idx = np.searchsorted(ref, events)
+
+        # clamp for neighbor comparison
+        idx_right = np.clip(idx, 0, len(ref) - 1)
+        idx_left = np.clip(idx - 1, 0, len(ref) - 1)
+
+        dist_left = np.abs(events - ref[idx_left])
+        dist_right = np.abs(events - ref[idx_right])
+
+        nearest = np.where(dist_left <= dist_right, idx_left, idx_right)
+
+        if tolerance is not None:
+            dist = np.abs(events - ref[nearest])
+            nearest = nearest[dist <= tolerance]
+
+        impulses[nearest] = True
+
+        return impulses
+
+    else:
+        raise ValueError("mode must be 'nearest' or 'exact'")
+
+
+def impulse_triggered_average(
+    signal, impulses, window_before=0, window_after=0, axis=0, normalize=False
+):
+    # convert inputs
+    signal = np.asarray(signal)
+    impulses = np.asarray(impulses, dtype=bool)
+    signal_t = np.moveaxis(signal, axis, 0)
+
+    # check dimensions
+    T = signal_t.shape[0]
+    if impulses.ndim != 1:
+        raise ValueError("impulses must be 1D")
+    if len(impulses) != T:
+        raise ValueError("Length of impulses must match signal.shape[axis]")
+
+    # process impulse events
+    event_idx = np.where(impulses)[0]
+    valid = (event_idx >= window_before) & (event_idx < T - window_after)
+    event_idx = event_idx[valid]
+    if len(event_idx) == 0:
+        raise ValueError("No valid impulse windows found.")
+    offsets = np.arange(-window_before, window_after + 1)
+    idx = event_idx[:, None] + offsets[None, :]
+
+    # compute triggered average
+    segments = signal_t[idx]
+    avg = segments.mean(axis=0)
+    if normalize:
+        avg = (avg - avg.min()) / (avg.max() - avg.min())
+    return avg

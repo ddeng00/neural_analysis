@@ -127,7 +127,7 @@ def plot_dropout(
         n_remaining = np.array([np.sum(n_trials >= t) for t in thresholds])
         if normalize:
             n_remaining = n_remaining / len(n_trials) * 100
-        ax.plot(thresholds, n_remaining, lw=2, label=grp)
+        ax.plot(thresholds, n_remaining, marker="o", lw=2, label=grp)
 
     # misc. settings
     if group is not None:
@@ -357,6 +357,8 @@ def plot_PSTH(
     if smooth_width is not None:
         smooth_width /= timestamps[1] - timestamps[0]
         smoothed = gaussian_filter1d(spike_rates, sigma=smooth_width)
+    if group_labels is not None and group_order is None:
+        group_order = np.unique(group_labels)
 
     # Collect into dataframe
     n, T = spike_rates.shape
@@ -420,7 +422,6 @@ def plot_PSTH(
             pvals = (pvals >= null).mean(axis=0)
 
         # annotate significance
-        ax_w = ax.bbox.width / 10
         mask = pvals < 0.05
         m = mask.astype(int)
         starts = np.where(np.diff(m) == 1)[0] + 1
@@ -442,6 +443,9 @@ def plot_PSTH(
         handles.append(line)
         labels.append("p < 0.05")
         ax.legend(handles, labels)
+
+        # reset y-limits
+        ax.set_ylim(y_min)
 
     sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1), title=None, frameon=False)
     return ax
@@ -616,6 +620,7 @@ def plot_metrics(
     x_order: list[str] | None = None,
     y_order: list[str] | None = None,
     y_emph: str | list[str] | None = None,
+    quantiles: tuple[float, float] = (0.05, 0.95),
     sig_test: bool = False,
     marker: str = "o",
     chance: float | None = 0.5,
@@ -703,9 +708,10 @@ def plot_metrics(
 
     # Plot null distribution
     if null is not None:
+        quantiles = sorted(quantiles)
         old_xlim = ax.get_xlim()
         if x_group is None:
-            low, high = null[metric].quantile([0.05, 0.95])
+            low, high = null[metric].quantile(quantiles)
             ax.fill_between(
                 [-0.25, 0.25],
                 [low, low],
@@ -718,7 +724,11 @@ def plot_metrics(
             y_min, y_max = min(y_min, low), max(y_max, high)
         else:
             labeled = False
-            null = null.groupby(x_group)[metric].quantile([0.05, 0.95]).unstack()
+            null = (
+                null.groupby(x_group, observed=True)[metric]
+                .quantile(quantiles)
+                .unstack()
+            )
             for grp, (low, high) in null.iterrows():
                 if grp not in x_order:
                     continue
@@ -730,7 +740,11 @@ def plot_metrics(
                     color="black",
                     alpha=0.25,
                     zorder=0,
-                    label=None if labeled else "Perm. Null\n(5-95th pctl.)",
+                    label=(
+                        None
+                        if labeled
+                        else f"Perm. Null\n({int(quantiles[0]*100)}-{int(quantiles[1]*100)}th pctl.)"
+                    ),
                 )
                 labeled = True
                 y_min, y_max = min(y_min, low), max(y_max, high)

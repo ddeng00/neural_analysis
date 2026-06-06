@@ -122,7 +122,7 @@ class Decodability(_BaseEstimator):
         if return_clfs:
             return {
                 "scores": np.mean(results["test_score"]),
-                "clfs": [clf.named_steps["clf"] for clf in results["estimator"]],
+                "clfs": results["estimator"],
             }
         else:
             return {"scores": np.mean(results["test_score"])}
@@ -392,7 +392,7 @@ class CCGP(_BaseEstimator):
         if return_clfs:
             return {
                 "scores": np.mean(results["test_score"]),
-                "clfs": [clf.named_steps["clf"] for clf in results["estimator"]],
+                "clfs": results["estimator"],
             }
         else:
             return {"scores": np.mean(results["test_score"])}
@@ -444,7 +444,7 @@ class IndependentSamplesCCGP(_BaseIndependentSamplesGeneralizer):
             if return_clfs:
                 return {
                     "scores": np.mean(results["test_score"]),
-                    "clfs": [clf.named_steps["clf"] for clf in results["estimator"]],
+                    "clfs": results["estimator"],
                 }
             else:
                 return {"scores": np.mean(results["test_score"])}
