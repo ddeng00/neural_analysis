@@ -323,9 +323,7 @@ class CCGP(_BaseEstimator):
 
     @staticmethod
     def shuffle(X: npt.ArrayLike, condition: npt.ArrayLike, rs: np.random.RandomState):
-        X = X.copy()
-        [rs.shuffle(Xi) for Xi in X]
-        return X
+        return rotate_data_within_groups(X, condition, random_state=rs)
 
     @staticmethod
     def validate(

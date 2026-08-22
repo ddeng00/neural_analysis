@@ -67,6 +67,7 @@ def construct_pseudopopulation(
     n_samples_per_cond: int | None = None,
     all_groups_complete: bool = False,
     random_state: int | np.random.RandomState | None = None,
+    return_ids: bool = False,
 ) -> tuple[np.ndarray, np.ndarray] | tuple[list[np.ndarray], np.ndarray]:
     """
     Construct a pseudopopulation from the given data.
@@ -96,6 +97,8 @@ def construct_pseudopopulation(
         Array containing the pseudopopulation data.
     conds : `numpy.ndarray` of shape (n_complete_groups, n_conditions)
         Array containing the conditions for each group.
+    units : `numpy.ndarray` of shape (n_complete_groups,)
+        Array containing the unit identifiers for each group.
     """
 
     if not isinstance(condition, list):
@@ -114,11 +117,14 @@ def construct_pseudopopulation(
     )
 
     # Note: previous groupby ensures that conditions are sorted
+    groups = resampled.groupby(unit)
     if not isinstance(response, list):
-        X = np.column_stack(resampled.groupby(unit)[response].agg(list))
+        X = np.column_stack(groups[response].agg(list))
         conds = resampled[condition].iloc[: len(X)].to_numpy(str)
-        return X, conds
     else:
-        Xs = [np.column_stack(resampled.groupby(unit)[v].agg(list)) for v in response]
-        conds = resampled[condition].iloc[: len(Xs[0])].to_numpy(str)
-        return Xs, conds
+        X = [np.column_stack(groups[v].agg(list)) for v in response]
+        conds = resampled[condition].iloc[: len(X[0])].to_numpy(str)
+
+    if return_ids:
+        return X, conds, list(groups.groups.keys())
+    return X, conds

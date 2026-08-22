@@ -8,6 +8,7 @@ def get_spikes(
     ends: npt.ArrayLike,
     alignments: npt.ArrayLike | None = None,
     *,
+    raw: bool = False,
     sorted: bool = True,
 ) -> list[np.ndarray]:
     """
@@ -24,6 +25,8 @@ def get_spikes(
     alignments : array-like of shape (n_trials,) or None, default=None
         Array of times within each trial window for alignment.
         If None, align to the start times.
+    raw : bool, default=False
+        Whether to return raw spike times (True) or spike times relative to the alignment (False
     sorted : bool, default=True
         Whether the timings are sorted in ascending order.
 
@@ -48,7 +51,10 @@ def get_spikes(
     for start, end, alignment in zip(starts, ends, alignments):
         start = np.searchsorted(spikes, start, side="left")
         end = np.searchsorted(spikes, end, side="right")
-        spikes_in_windows.append(spikes[start:end] - alignment)
+        if raw:
+            spikes_in_windows.append(spikes[start:end])
+        else:
+            spikes_in_windows.append(spikes[start:end] - alignment)
 
     return spikes_in_windows
 

@@ -627,7 +627,9 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
 
         # infer number of samples per condition if not provided
         if n_samples_per_cond is None:
-            n_samples_per_cond = [d.groupby([unit] + condition).size().min() for d in data]
+            n_samples_per_cond = [
+                d.groupby([unit] + condition).size().min() for d in data
+            ]
         elif isinstance(n_samples_per_cond, int):
             n_samples_per_cond = [n_samples_per_cond] * len(data)
         else:
@@ -746,6 +748,21 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
             n_jobs=n_jobs,
         )
 
+    def _shuffle_pair(
+        self,
+        X1: npt.ArrayLike,
+        condition1: npt.ArrayLike,
+        X2: npt.ArrayLike,
+        condition2: npt.ArrayLike,
+        rs: np.random.RandomState,
+        same_group: bool,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        X1_null = self.shuffle(X1, condition1, rs)
+        if same_group:
+            return X1_null, X1_null
+        X2_null = self.shuffle(X2, condition2, rs)
+        return X1_null, X2_null
+
     def _score_helper(
         self,
         i: int,
@@ -818,14 +835,17 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                     continue
 
                 # pool data and shuffle
-                if i == j:
-                    Xi = Xj = self.shuffle(Xs[i], conditions[i], rs)
-                else:
-                    X_ij = np.vstack([Xs[i], Xs[j]])
-                    c_ij = np.vstack([conditions[i], conditions[j]])
-                    X_ij = self.shuffle(X_ij, c_ij, rs)
-                    Xi = X_ij[: len(Xs[i])]
-                    Xj = X_ij[len(Xs[i]) :]
+                # if i == j:
+                #     Xi = Xj = self.shuffle(Xs[i], conditions[i], rs)
+                # else:
+                #     X_ij = np.vstack([Xs[i], Xs[j]])
+                #     c_ij = np.vstack([conditions[i], conditions[j]])
+                #     X_ij = self.shuffle(X_ij, c_ij, rs)
+                #     Xi = X_ij[: len(Xs[i])]
+                #     Xj = X_ij[len(Xs[i]) :]
+                Xi, Xj = self._shuffle_pair(
+                    Xs[i], conditions[i], Xs[j], conditions[j], rs, same_group=i == j
+                )
 
                 for k, dichot_name in enumerate(self.dichotomy_names):
                     d_res = self.__class__.validate(
