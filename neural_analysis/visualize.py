@@ -8,6 +8,7 @@ import numpy.typing as npt
 import matplotlib as mpl
 from matplotlib import colormaps
 import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon, Rectangle
 import seaborn as sns
 from scipy.stats import sem
 from scipy.ndimage import gaussian_filter1d
@@ -106,7 +107,12 @@ def plot_dropout(
     if not isinstance(condition, list):
         condition = [condition]
 
-    for grp, df in data.groupby(group):
+    if group is not None:
+        groups = data.groupby(group)
+    else:
+        groups = [(None, data)]
+
+    for grp, df in groups:
         # infer the number of conditional groups if not provided
         if n_conditions is None:
             n_conditions = df.groupby(condition).ngroups
@@ -223,7 +229,6 @@ def plot_spikes(
     # Create a new figure if no Axes object is provided
     if ax is None:
         _, ax = plt.subplots()
-    ax_h = ax.bbox.height / 3
 
     # Sort spikes by stats
     if stats is not None:
@@ -236,8 +241,10 @@ def plot_spikes(
             group_labels = group_labels[ind]
 
     # Plot spikes
-    linelengths = len(spikes) / ax_h
-    linewidths = 1
+    # linelengths = len(spikes) / (ax.bbox.height * 1.5)
+    linelengths = len(spikes) / (ax.bbox.height / 2)
+    linewidths = ax.bbox.width / 500
+
     if group_labels is None:
         ax.eventplot(spikes, linelengths=linelengths, linewidths=linewidths)
         if plot_stats and stats is not None:
@@ -292,9 +299,6 @@ def plot_spikes(
                 )
                 start_ind = end_ind
 
-    # Plot zero line
-    ax.axvline(0, color="black", linestyle="--", alpha=0.75)
-
     # Misc. settings
     ax.set_ylim(0, len(spikes))
 
@@ -309,7 +313,9 @@ def plot_PSTH(
     group_order: npt.ArrayLike | None = None,
     error_type: str | tuple[str, float] | None = "se",
     sig_test: bool = False,
+    alpha: float = 0.05,
     raw_labels: npt.ArrayLike | None = None,
+    nuisance: npt.ArrayLike | None = None,
     smooth_width: float | None = None,
     ax: plt.Axes | None = None,
     cmap: str | npt.ArrayLike | dict | mpl.colors.Colormap = "tab10",
@@ -356,18 +362,24 @@ def plot_PSTH(
     timestamps = np.asarray(timestamps)
     if smooth_width is not None:
         smooth_width /= timestamps[1] - timestamps[0]
-        smoothed = gaussian_filter1d(spike_rates, sigma=smooth_width)
+        to_plot = gaussian_filter1d(spike_rates, sigma=smooth_width)
+    else:
+        to_plot = spike_rates.copy()
+    if nuisance is not None:
+        for v in np.unique(nuisance):
+            mask = nuisance == v
+            to_plot[mask] = (to_plot[mask] - to_plot[mask].mean(axis=0)) / np.sqrt(
+                to_plot[mask].mean(axis=0) + 1e-6
+            )
     if group_labels is not None and group_order is None:
         group_order = np.unique(group_labels)
 
     # Collect into dataframe
-    n, T = spike_rates.shape
+    n, T = to_plot.shape
     sns.lineplot(
         data={
             "time": np.tile(timestamps, n),
-            "rate": (
-                spike_rates.flatten() if smooth_width is None else smoothed.flatten()
-            ),
+            "rate": to_plot.flatten(),
             "label": np.repeat(group_labels, T) if group_labels is not None else None,
         },
         x="time",
@@ -377,10 +389,8 @@ def plot_PSTH(
         errorbar=error_type,
         palette=cmap,
         ax=ax,
+        **kwargs
     )
-
-    # Plot zero line
-    ax.axvline(0, color="black", linestyle="--", alpha=0.75)
 
     # Plot significance
     if group_labels is not None and sig_test:
@@ -394,15 +404,26 @@ def plot_PSTH(
             for i, rate in enumerate(srs.T):
                 if mask is not None and not mask[i]:
                     continue
-                model = smf.glm(
-                    "y ~ x",
-                    data={"y": rate, "x": raw_labels},
-                    family=sm.families.Poisson(),
-                )
+                if nuisance is not None:
+                    model = smf.glm(
+                        "y ~ x + z",
+                        data={
+                            "y": rate,
+                            "x": raw_labels,
+                            "z": nuisance,
+                        },
+                        family=sm.families.Poisson(),
+                    )
+                else:
+                    model = smf.glm(
+                        "y ~ x",
+                        data={"y": rate, "x": raw_labels},
+                        family=sm.families.Poisson(),
+                    )
                 try:
                     model = model.fit(scale="X2", disp=0, use_t=True)
                     wald = model.wald_test_terms(scalar=True)
-                    pvals[i] = wald.pvalues[-1]
+                    pvals[i] = wald.table.loc["x", "pvalue"]
                 except:
                     pvals[i] = np.nan
             return pvals
@@ -411,7 +432,7 @@ def plot_PSTH(
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=ConvergenceWarning)
             pvals = _helper(False)
-        mask = pvals < 0.05
+        mask = pvals < alpha
         if n_permutes > 0:
             null = list(
                 Parallel(n_jobs=n_jobs)(
@@ -422,7 +443,7 @@ def plot_PSTH(
             pvals = (pvals >= null).mean(axis=0)
 
         # annotate significance
-        mask = pvals < 0.05
+        mask = pvals < alpha
         m = mask.astype(int)
         starts = np.where(np.diff(m) == 1)[0] + 1
         ends = np.where(np.diff(m) == -1)[0] + 1
@@ -441,7 +462,7 @@ def plot_PSTH(
         line = ax.add_line(mpl.lines.Line2D([0], [0], c="r", lw=3, alpha=0.75))
         handles, labels = ax.get_legend_handles_labels()
         handles.append(line)
-        labels.append("p < 0.05")
+        labels.append(f"p < {alpha}")
         ax.legend(handles, labels)
 
         # reset y-limits
@@ -456,15 +477,19 @@ def plot_spikes_with_PSTH(
     alignments: npt.ArrayLike,
     *,
     window: tuple[float, float] = (-1, 2.5),
+    bl_alignments: npt.ArrayLike | None = None,
+    bl_window: tuple[float, float] | None = None,
     step: float = 0.025,
     width: float = 0.5,
     group_labels: npt.ArrayLike | None = None,
     group_order: npt.ArrayLike | None = None,
+    nuisance: npt.ArrayLike | None = None,
     stats: npt.ArrayLike | None = None,
     ascending: bool = False,
     plot_stats: bool = False,
     error_type: str | tuple[str, float] | None = ("ci", 95),
     sig_test: bool = False,
+    alpha: float = 0.05,
     raw_labels: npt.ArrayLike | None = None,
     smooth_width: float | None = None,
     axes: tuple[plt.Axes, plt.Axes] | None = None,
@@ -473,6 +498,7 @@ def plot_spikes_with_PSTH(
     alignment: str = "center",
     n_permutes: int = 0,
     n_jobs: int = -1,
+    **kwargs,
 ) -> tuple[plt.Axes, plt.Axes]:
     """
     Plot spike rasters and peristimulus time histograms (PSTHs) together.
@@ -539,10 +565,12 @@ def plot_spikes_with_PSTH(
     spikes = np.asarray(spikes)
     alignments = np.asarray(alignments)
 
-    # Compute per-trial spikes and spike rates
+    # Compute per-trial spikes
     trial_spikes = get_spikes(
         spikes, alignments + window[0], alignments + window[1], alignments
     )
+
+    # Compute per-trial spike rates
     w_starts, w_ends, w_refs = create_rolling_window(
         window[0], window[1], step, width, alignment=alignment
     )
@@ -554,6 +582,20 @@ def plot_spikes_with_PSTH(
             for ts in alignments
         ]
     )
+
+    # baseline normalize
+    if bl_window is not None:
+        if bl_alignments is None:
+            bl_alignments = alignments
+        bl_sr = np.asarray(
+            compute_spike_rates(
+                spikes,
+                bl_window[0] + bl_alignments,
+                bl_window[1] + bl_alignments,
+                unit_conversion=unit_conversion,
+            )
+        )
+        trial_sr = trial_sr - bl_sr[:, None] + bl_sr.mean()
 
     # Plot spike raster
     plot_spikes(
@@ -573,14 +615,17 @@ def plot_spikes_with_PSTH(
         w_refs,
         group_labels=group_labels,
         raw_labels=raw_labels,
+        nuisance=nuisance,
         group_order=group_order,
         error_type=error_type,
         sig_test=sig_test,
+        alpha=alpha,
         smooth_width=smooth_width,
         ax=axes[1],
         cmap=cmap,
         n_permutes=n_permutes,
         n_jobs=n_jobs,
+        **kwargs
     )
 
     # Misc. settings
@@ -602,7 +647,15 @@ def plot_spikes_with_PSTH(
             frameon=False,
         )
     axes[1].set_xlabel("Time [s]")
-    axes[1].set_ylabel("Firing Rate [Hz]")
+
+    ylabel = "Firing Rate"
+    if bl_window is not None:
+        ylabel = "Bln. Firing Rate"
+    if nuisance is None:
+        ylabel += " (Hz)"
+    else:
+        ylabel += " (resid.)"
+    axes[1].set_ylabel(ylabel)
 
     sns.despine(ax=axes[0])
     sns.despine(ax=axes[1])
@@ -621,194 +674,542 @@ def plot_metrics(
     y_order: list[str] | None = None,
     y_emph: str | list[str] | None = None,
     quantiles: tuple[float, float] = (0.05, 0.95),
-    sig_test: bool = False,
+    annotate: bool = False,
+    use_p: bool = False,
     marker: str = "o",
     chance: float | None = 0.5,
     palette: str | npt.ArrayLike | dict | mpl.colors.Colormap = "tab10",
     markersize: int = 10,
+    linewidth: float = 3,
     ax: plt.Axes | None = None,
     **kwargs,
 ):
+    q_low, q_high = sorted(quantiles)
 
-    # Process parameters
-    if x_group is not None and x_order is None:
-        x_order = np.unique(data[x_group])
-    if y_group is not None and y_order is None:
-        y_order = np.unique(data[y_group])
+    if x_group is not None:
+        x_order = list(pd.unique(data[x_group])) if x_order is None else list(x_order)
 
-    # Create a new figure if no Axes object is provided
+    if annotate and (null is None or x_group is None):
+        raise ValueError("annotate=True requires both null and x_group.")
+    if y_emph is not None and y_group is None:
+        raise ValueError("y_emph requires y_group.")
+
     if ax is None:
-        x_n = 1 if x_group is None else len(x_order)
-        _, ax = plt.subplots(figsize=(x_n, 6))
+        _, ax = plt.subplots(figsize=(1 if x_group is None else len(x_order), 6))
 
-    # Plot metrics
-    if y_emph is None:
-        sns.pointplot(
-            data,
-            x=x_group,
-            y=metric,
-            hue=y_group,
-            order=x_order,
-            hue_order=y_order,
-            errorbar=None,
-            markers=marker,
-            markersize=markersize,
-            markeredgecolor="black",
-            lw=3,
-            palette=palette,
-            ax=ax,
-            zorder=100,
-            **kwargs,
+    # ------------------------------------------------------------------
+    # Colors / emphasized groups
+    # ------------------------------------------------------------------
+
+    all_ys = list(pd.unique(data[y_group])) if y_group is not None else []
+    emph_order = (
+        list(all_ys if y_order is None else y_order) if y_group is not None else [None]
+    )
+    active = list(emph_order)
+
+    if y_emph is not None:
+        selected = (
+            set(data.loc[data[y_emph].fillna(False).astype(bool), y_group])
+            if isinstance(y_emph, str)
+            else set(y_emph)
         )
+        active = [g for g in emph_order if g in selected]
+        if not active:
+            raise ValueError("y_emph did not select any y_group conditions.")
 
+    colors = None
+    if y_group is not None:
+        colors = {g: "grey" for g in all_ys}
+        if isinstance(palette, dict):
+            colors.update({g: palette[g] for g in active})
+        elif isinstance(palette, mpl.colors.Colormap):
+            xs = np.linspace(0, 1, max(2, len(active)))
+            colors.update({g: palette(xs[i]) for i, g in enumerate(active)})
+        else:
+            colors.update(dict(zip(active, sns.color_palette(palette, len(active)))))
+
+    # ------------------------------------------------------------------
+    # Observed values
+    # ------------------------------------------------------------------
+    point_kws = dict(
+        x=x_group,
+        y=metric,
+        hue=y_group,
+        order=x_order,
+        errorbar=None,
+        markers=marker,
+        markersize=markersize,
+        linewidth=linewidth,
+        markeredgecolor="black",
+        ax=ax,
+    )
+
+    if y_emph is not None:
+        # Muted groups come from the data, not y_order. y_order only
+        # controls which emphasized groups are shown and in what order.
+        muted = [g for g in all_ys if g not in active]
+
+        if muted:
+            muted_point_kws = {**point_kws, "markeredgecolor": "grey"}
+            sns.pointplot(
+                data=data[data[y_group].isin(muted)],
+                hue_order=muted,
+                palette=colors,
+                linestyle="",
+                alpha=0.25,
+                legend=False,
+                zorder=100,
+                **muted_point_kws,
+                **({"dodge": kwargs["dodge"]} if "dodge" in kwargs else {}),
+            )
+
+        plot_data = data[data[y_group].isin(active)]
+        hue_order = active
+        plot_palette = colors
     else:
-        if isinstance(y_emph, str):
-            y_emph = data.loc[data[y_emph], y_group].unique()
-        y_order = [y for y in y_order if y in y_emph]
-        y_emph = np.isin(data[y_group], y_emph)
-        sns.pointplot(
-            data[~y_emph],
-            x=x_group,
-            y=metric,
-            hue=y_group,
-            order=x_order,
-            errorbar=None,
-            markers=marker,
-            markerfacecolor="white",
-            markeredgecolor="black",
-            ls="",
-            # dodge=0.25,
-            alpha=0.25,
-            ax=ax,
-            zorder=100,
-            legend=False,
-        )
-        sns.pointplot(
-            data[y_emph],
-            x=x_group,
-            y=metric,
-            hue=y_group,
-            order=x_order,
-            hue_order=y_order,
-            errorbar=None,
-            markers=marker,
-            markersize=markersize,
-            markeredgecolor="black",
-            lw=3,
-            palette=palette,
-            ax=ax,
-            zorder=200,
-            **kwargs,
-        )
+        plot_data = data
+        hue_order = emph_order if y_group is not None else None
+        plot_palette = colors or palette
 
-    # Get plot limits
-    ys = [line.get_ydata() for line in ax.get_lines()]
-    y_min = min([min(y) for y in ys if len(y) > 0])
-    y_max = max([max(y) for y in ys if len(y) > 0])
+    sns.pointplot(
+        data=plot_data,
+        hue_order=hue_order,
+        palette=plot_palette,
+        zorder=200,
+        **point_kws,
+        **kwargs,
+    )
 
-    # Plot null distribution
+    # ------------------------------------------------------------------
+    # Current plotted range
+    # ------------------------------------------------------------------
+    ys = [
+        np.asarray(line.get_ydata(), float)
+        for line in ax.lines
+        if len(line.get_ydata())
+    ]
+    ys = np.concatenate(ys or [np.array([0.0, 1.0])])
+    ys = ys[np.isfinite(ys)]
+    y_min, y_max = ys.min(), ys.max()
+
+    # ------------------------------------------------------------------
+    # Null distributions
+    # ------------------------------------------------------------------
+    null_dists = {}
+    null_bounds = {}
+
     if null is not None:
-        quantiles = sorted(quantiles)
         old_xlim = ax.get_xlim()
-        if x_group is None:
-            low, high = null[metric].quantile(quantiles)
+        label = f"Perm. Null\n({q_low:.0%}-{q_high:.0%} pctl.)"
+
+        groups = (
+            [(0, None, null[metric])]
+            if x_group is None
+            else [
+                (x, g, null.loc[null[x_group].eq(g), metric])
+                for x, g in enumerate(x_order)
+            ]
+        )
+
+        for i, (x, g, values) in enumerate(groups):
+            values = values.dropna()
+            if values.empty:
+                continue
+
+            null_dists[g] = values.to_numpy(float)
+            low, high = values.quantile([q_low, q_high])
+            null_bounds[g] = (float(low), float(high))
+
             ax.fill_between(
-                [-0.25, 0.25],
+                [x - 0.25, x + 0.25],
                 [low, low],
                 [high, high],
                 color="black",
                 alpha=0.25,
                 zorder=0,
-                label="Perm. Null\n(5-95th pctl.)",
+                label=label if i == 0 else None,
             )
-            y_min, y_max = min(y_min, low), max(y_max, high)
-        else:
-            labeled = False
-            null = (
-                null.groupby(x_group, observed=True)[metric]
-                .quantile(quantiles)
-                .unstack()
-            )
-            for grp, (low, high) in null.iterrows():
-                if grp not in x_order:
-                    continue
-                grp = list(x_order).index(grp)
-                ax.fill_between(
-                    [grp - 0.25, grp + 0.25],
-                    [low, low],
-                    [high, high],
-                    color="black",
-                    alpha=0.25,
-                    zorder=0,
-                    label=(
-                        None
-                        if labeled
-                        else f"Perm. Null\n({int(quantiles[0]*100)}-{int(quantiles[1]*100)}th pctl.)"
-                    ),
-                )
-                labeled = True
-                y_min, y_max = min(y_min, low), max(y_max, high)
+
+            y_min = min(y_min, low)
+            y_max = max(y_max, high)
+
         ax.set_xlim(old_xlim)
 
-    # Plot chance level
+    # ------------------------------------------------------------------
+    # Chance
+    # ------------------------------------------------------------------
     if chance is not None:
-        ax.axhline(chance, color="red", linestyle="--", zorder=0, label="Chance")
+        ax.axhline(
+            chance,
+            color="red",
+            linestyle="--",
+            zorder=0,
+            label="Chance",
+        )
+        y_min = min(y_min, chance)
+        y_max = max(y_max, chance)
 
-    # Plot significance test results
-    if x_group is not None and sig_test:
-        x_test_base = np.mean(np.arange(len(x_order)))
-        y_test = y_max + 0.05 * (y_max - y_min)
-        if y_group is None:
-            p = anova_oneway(np.sqrt(data[metric]), data[x_group]).pvalue
-            if p < 0.05:
-                ax.text(
-                    np.mean(np.arange(len(x_order))),
-                    y_test,
-                    "*",
-                    ha="center",
-                    va="bottom",
-                    fontsize=16,
-                    weight="bold",
-                    color="black",
-                    zorder=300,
-                )
-        else:
-            cmap = sns.color_palette(palette, len(y_order))
-            to_plot = []
-            for i, y in enumerate(y_order):
-                df = data[data[y_group] == y]
-                p = anova_oneway(np.sqrt(df[metric]), df[x_group]).pvalue
-                if p < 0.05 / len(y_order):
-                    to_plot.append(cmap[i])
-            x_tests = (
-                (
-                    np.linspace(
-                        1 - len(to_plot) / 2.0, len(to_plot) / 2.0 - 1, len(to_plot)
-                    )
-                    * 0.25
-                    + x_test_base
-                )
-                if len(to_plot) > 1
-                else [x_test_base]
+    # ------------------------------------------------------------------
+    # Significance annotations
+    # ------------------------------------------------------------------
+    if annotate:
+        estimator = kwargs.get("estimator", "mean")
+
+        def estimate(values):
+            return float(
+                estimator(values) if callable(estimator) else values.agg(estimator)
             )
-            for x, color in zip(x_tests, to_plot):
+
+        def significance(obs, dist, bounds):
+            if use_p:
+                p = (np.sum(dist <= obs) + 1) / (len(dist) + 1)
+                return "*" if p <= q_low or p >= q_high else ""
+            low, high = bounds
+            return "*" if obs <= low or obs >= high else ""
+
+        span = y_max - y_min
+        if span <= 0:
+            span = max(abs(y_max), 1.0) * 0.1
+
+        offset = 0.10 * span
+        spacing = 0.06 * span
+        annotation_tops = []
+
+        for x, xv in enumerate(x_order):
+            if xv not in null_dists:
+                continue
+
+            dist = null_dists[xv]
+            bounds = null_bounds[xv]
+            estimates = {}
+            sigs = []
+
+            for g in active:
+                mask = data[x_group].eq(xv)
+                if g is not None:
+                    mask &= data[y_group].eq(g)
+
+                values = data.loc[mask, metric].dropna()
+                if values.empty:
+                    continue
+
+                obs = estimate(values)
+                estimates[g] = obs
+
+                stars = significance(obs, dist, bounds)
+                if stars:
+                    sigs.append(("black" if g is None else colors[g], stars))
+
+            if not estimates or not sigs:
+                continue
+
+            # Clear observed points, null interval, and chance line.
+            highest = max(max(estimates.values()), bounds[1])
+            if chance is not None:
+                highest = max(highest, chance)
+
+            for level, (color, stars) in enumerate(reversed(sigs)):
+                y = highest + offset + level * spacing
                 ax.text(
                     x,
-                    y_test,
-                    "*",
+                    y,
+                    stars,
                     ha="center",
-                    va="bottom",
-                    fontsize=16,
-                    weight="bold",
+                    va="center",
                     color=color,
-                    zorder=300,
+                    fontsize=16,
+                    fontweight="bold",
+                    clip_on=False,
+                    zorder=1000,
                 )
+                annotation_tops.append(y)
 
-    # Misc. settings
-    ax.legend()
+        if annotation_tops:
+            bottom, top = ax.get_ylim()
+            ax.set_ylim(bottom, max(top, max(annotation_tops) + spacing))
+
+    # ------------------------------------------------------------------
+    # Legend / cleanup
+    # ------------------------------------------------------------------
+    handles, labels = ax.get_legend_handles_labels()
+    legend = dict(zip(labels, handles))
+
+    if legend:
+        ax.legend(
+            legend.values(),
+            legend.keys(),
+            loc="upper left",
+            bbox_to_anchor=(1, 1),
+            frameon=False,
+        )
+
     sns.despine(ax=ax)
-    sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1), title=None, frameon=False)
+    return ax
 
+
+def plot_metrics_continuous(
+    data: pd.DataFrame,
+    metric: str = "scores",
+    *,
+    null: pd.DataFrame | None = None,
+    ts_group: str | None = None,
+    y_group: str | None = None,
+    y_order: list[str] | None = None,
+    y_emph: str | list[str] | None = None,
+    quantiles: tuple[float, float] = (0.05, 0.95),
+    annotate: bool = False,
+    use_p: bool = False,
+    chance: float | None = 0.5,
+    min_samples: int = 1,
+    palette: str | npt.ArrayLike | dict | mpl.colors.Colormap = "tab10",
+    linewidth: float = 3,
+    smooth_width: float | None = None,
+    ax: plt.Axes | None = None,
+    **kwargs,
+):
+    q_low, q_high = sorted(quantiles)
+
+    if not 0 <= q_low <= q_high <= 1:
+        raise ValueError("quantiles must be between 0 and 1.")
+    if ts_group is None:
+        raise ValueError("ts_group is required.")
+    if annotate and null is None:
+        raise ValueError("annotate=True requires null.")
+    if y_emph is not None and y_group is None:
+        raise ValueError("y_emph requires y_group.")
+
+    data = data.sort_values(by=ts_group)
+    orig_data = data.copy()
+    if smooth_width is not None:
+        data[metric] = data.groupby(y_group)[metric].transform(
+            gaussian_filter1d, sigma=smooth_width
+        )
+
+    times = np.sort(data[ts_group].dropna().unique()).astype(float)
+    if not len(times) or not np.isfinite(times).all():
+        raise ValueError("ts_group must contain finite numeric timepoints.")
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 6))
+
+    all_ys = list(pd.unique(data[y_group])) if y_group is not None else []
+    emph_order = (
+        list(all_ys if y_order is None else y_order) if y_group is not None else [None]
+    )
+    active = list(emph_order)
+
+    if y_emph is not None:
+        selected = (
+            set(data.loc[data[y_emph].fillna(False).astype(bool), y_group])
+            if isinstance(y_emph, str)
+            else set(y_emph)
+        )
+        active = [g for g in emph_order if g in selected]
+        if not active:
+            raise ValueError("y_emph did not select any y_group conditions.")
+
+    colors = None
+    if y_group is not None:
+        colors = {g: "grey" for g in all_ys}
+        if isinstance(palette, dict):
+            colors.update({g: palette[g] for g in active})
+        elif isinstance(palette, mpl.colors.Colormap):
+            xs = np.linspace(0, 1, max(2, len(active)))
+            colors.update({g: palette(xs[i]) for i, g in enumerate(active)})
+        else:
+            colors.update(dict(zip(active, sns.color_palette(palette, len(active)))))
+
+    line_kws = dict(
+        x=ts_group,
+        y=metric,
+        hue=y_group,
+        errorbar=None,
+        linewidth=linewidth,
+        sort=True,
+        ax=ax,
+    )
+    line_kws.update(kwargs)
+
+    if y_emph is not None:
+        # Muted groups come from the data, not y_order. y_order only
+        # controls which emphasized groups are shown and in what order.
+        muted = [g for g in all_ys if g not in active]
+        if muted:
+            muted_kws = {
+                **line_kws,
+                "hue_order": muted,
+                "palette": colors,
+                "alpha": 0.25,
+                "legend": False,
+                "zorder": 100,
+            }
+            sns.lineplot(
+                data=data[data[y_group].isin(muted)],
+                **muted_kws,
+            )
+        plot_data = data[data[y_group].isin(active)]
+        hue_order = active
+    else:
+        plot_data = data
+        hue_order = emph_order if y_group is not None else None
+
+    first_line = len(ax.lines)
+    sns.lineplot(
+        data=plot_data,
+        **{
+            **line_kws,
+            "hue_order": hue_order,
+            "palette": colors if colors is not None else palette,
+            "zorder": kwargs.get("zorder", 200),
+        },
+    )
+
+    observed_lines = ax.lines[first_line:]
+    single_color = next(
+        (line.get_color() for line in observed_lines if len(line.get_ydata())),
+        kwargs.get("color", "black"),
+    )
+
+    ys = [
+        np.asarray(line.get_ydata(), dtype=float)
+        for line in ax.lines
+        if len(line.get_ydata())
+    ]
+    ys = np.concatenate(ys) if ys else np.array([])
+    ys = ys[np.isfinite(ys)]
+    y_min, y_max = (ys.min(), ys.max()) if ys.size else (0.0, 1.0)
+
+    dist = np.array([], dtype=float)
+    bounds = None
+
+    if null is not None:
+        dist = null[metric].dropna().to_numpy(dtype=float)
+        dist = dist[np.isfinite(dist)]
+
+        if dist.size:
+            low, high = np.quantile(dist, [q_low, q_high])
+            bounds = (low, high)
+            ax.axhspan(
+                low,
+                high,
+                color="black",
+                alpha=0.25,
+                zorder=0,
+                label=f"Perm. Null\n({q_low:.0%}-{q_high:.0%} pctl.)",
+            )
+            y_min = min(y_min, low)
+            y_max = max(y_max, high)
+
+    if chance is not None:
+        ax.axhline(
+            chance,
+            color="red",
+            linestyle="--",
+            zorder=0,
+            label="Chance",
+        )
+        y_min = min(y_min, chance)
+        y_max = max(y_max, chance)
+
+    if annotate and bounds is not None:
+        estimator = kwargs.get("estimator", "mean")
+        if estimator is None:
+            raise ValueError("annotate=True requires an estimator.")
+
+        def estimate(values):
+            values = values.dropna()
+            if values.empty:
+                return np.nan
+            return float(
+                estimator(values) if callable(estimator) else values.agg(estimator)
+            )
+
+        def significant(obs):
+            if use_p:
+                p = (np.sum(dist <= obs) + 1) / (len(dist) + 1)
+                return p <= q_low or p >= q_high
+            return obs <= bounds[0] or obs >= bounds[1]
+
+        def singleton_interval(i):
+            if len(times) == 1:
+                return times[i] - 0.5, times[i] + 0.5
+            left_step = times[i] - times[i - 1] if i else times[1] - times[0]
+            right_step = (
+                times[i + 1] - times[i] if i < len(times) - 1 else times[-1] - times[-2]
+            )
+            return times[i] - left_step / 2, times[i] + right_step / 2
+
+        span = y_max - y_min
+        if span <= 0:
+            span = max(abs(y_max), 1.0) * 0.1
+
+        offset = 0.10 * span
+        spacing = 0.06 * span
+        annotation_tops = []
+        level = 0
+
+        for g in reversed(active):
+            group_data = (
+                orig_data if y_group is None else orig_data[orig_data[y_group].eq(g)]
+            )
+            estimates = (
+                group_data.groupby(ts_group)[metric]
+                .agg(estimate)
+                .reindex(times)
+                .to_numpy(dtype=float)
+            )
+            sig = np.array(
+                [np.isfinite(obs) and significant(obs) for obs in estimates],
+                dtype=bool,
+            )
+
+            indices = np.flatnonzero(sig)
+            if not indices.size:
+                continue
+
+            runs = np.split(indices, np.flatnonzero(np.diff(indices) > 1) + 1)
+            runs = [run for run in runs if len(run) >= min_samples]
+            if not runs:
+                continue
+            
+            segments = [
+                (
+                    singleton_interval(run[0])
+                    if len(run) == 1
+                    else (times[run[0]], times[run[-1]])
+                )
+                for run in runs
+            ]
+
+            y = y_max + offset + level * spacing
+            ax.hlines(
+                y=np.full(len(segments), y),
+                xmin=[start for start, _ in segments],
+                xmax=[end for _, end in segments],
+                colors=single_color if y_group is None else colors[g],
+                linewidth=linewidth * 1.5,
+                clip_on=False,
+                zorder=1000,
+            )
+            annotation_tops.append(y)
+            level += 1
+
+        if annotation_tops:
+            bottom, top = ax.get_ylim()
+            ax.set_ylim(bottom, max(top, max(annotation_tops) + spacing))
+
+    handles, labels = ax.get_legend_handles_labels()
+    legend = dict(zip(labels, handles))
+    if legend:
+        ax.legend(
+            legend.values(),
+            legend.keys(),
+            loc="upper left",
+            bbox_to_anchor=(1, 1),
+            frameon=False,
+        )
+
+    sns.despine(ax=ax)
     return ax
 
 
@@ -1199,3 +1600,59 @@ def plot_dendrogram(
     ax.set_yticklabels(labels)
 
     return ax
+
+
+def draw_sig_outlines(sig, ax, **kwargs):
+    sig = np.asarray(sig, bool)
+    nrows, ncols = sig.shape
+    edges = {}
+
+    def add(p0, p1):
+        k = tuple(sorted((p0, p1)))
+        if k in edges:
+            del edges[k]
+        else:
+            edges[k] = (p0, p1)
+
+    for i in range(nrows):
+        for j in range(ncols):
+            if not sig[i, j]:
+                continue
+            p = [(j, i), (j + 1, i), (j + 1, i + 1), (j, i + 1)]
+            add(p[0], p[1])
+            add(p[1], p[2])
+            add(p[2], p[3])
+            add(p[3], p[0])
+
+    adj = defaultdict(list)
+    for a, b in edges.values():
+        adj[a].append(b)
+        adj[b].append(a)
+
+    visited = set()
+    polys = []
+    for k, (a0, a1) in edges.items():
+        if k in visited:
+            continue
+        poly = [a0]
+        prev, cur = a0, a1
+        while True:
+            poly.append(cur)
+            visited.add(tuple(sorted((prev, cur))))
+            nxt = None
+            for nb in adj[cur]:
+                if nb == prev:
+                    continue
+                ek = tuple(sorted((cur, nb)))
+                if ek in edges and ek not in visited:
+                    nxt = nb
+                    break
+            if nxt is None or nxt == poly[0]:
+                break
+            prev, cur = cur, nxt
+        polys.append(poly)
+
+    for poly in polys:
+        ax.add_patch(
+            Polygon(poly, closed=True, fill=False, antialiased=False, **kwargs)
+        )

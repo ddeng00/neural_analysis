@@ -489,7 +489,7 @@ def pvalue_to_decimal(pvalue: float, levels: list[float] = [0.05, 0.01, 0.001]) 
         A string of asterisks representing the significance level of the p-value.
     """
     levels = sorted(levels, reverse=True)
-    ret_val = "ns"
+    ret_val = "n.s."
     for i, level in enumerate(levels):
         if pvalue <= level:
             ret_val = "*" * (i + 1)
@@ -607,7 +607,14 @@ def to_impulse(ts, event_ts, mode="nearest", tolerance=None):
 
 
 def impulse_triggered_average(
-    signal, impulses, window_before=0, window_after=0, axis=0, normalize=False
+    signal,
+    impulses,
+    window_before=0,
+    window_after=0,
+    axis=0,
+    normalize=False,
+    full=False,
+    keep_invalid=False,
 ):
     # convert inputs
     signal = np.asarray(signal)
@@ -622,17 +629,48 @@ def impulse_triggered_average(
         raise ValueError("Length of impulses must match signal.shape[axis]")
 
     # process impulse events
-    event_idx = np.where(impulses)[0]
-    valid = (event_idx >= window_before) & (event_idx < T - window_after)
-    event_idx = event_idx[valid]
+    all_event_idx = np.where(impulses)[0]
+    valid = (all_event_idx >= window_before) & (all_event_idx < T - window_after)
+    event_idx = all_event_idx[valid]
+
     if len(event_idx) == 0:
         raise ValueError("No valid impulse windows found.")
-    offsets = np.arange(-window_before, window_after + 1)
-    idx = event_idx[:, None] + offsets[None, :]
 
-    # compute triggered average
-    segments = signal_t[idx]
-    avg = segments.mean(axis=0)
+    offsets = np.arange(-window_before, window_after + 1)
+
+    # valid segments used for average
+    idx = event_idx[:, None] + offsets[None, :]
+    segments_valid = signal_t[idx]
+    avg = segments_valid.mean(axis=0)
+
     if normalize:
-        avg = (avg - avg.min()) / (avg.max() - avg.min())
+        vmin, vmax = avg.min(), avg.max()
+        avg = (avg - vmin) / (vmax - vmin)
+        segments_valid = (segments_valid - vmin) / (vmax - vmin)
+
+    if full:
+        if keep_invalid:
+            # One row per impulse, including edge events.
+            shape = (
+                len(all_event_idx),
+                len(offsets),
+                *signal_t.shape[1:],
+            )
+            segments = np.full(shape, np.nan, dtype=np.result_type(signal, float))
+
+            idx_all = all_event_idx[:, None] + offsets[None, :]
+            in_bounds = (idx_all >= 0) & (idx_all < T)
+
+            # Fill each relative-time position where it exists.
+            for j in range(len(offsets)):
+                mask = in_bounds[:, j]
+                segments[mask, j] = signal_t[idx_all[mask, j]]
+
+            if normalize:
+                segments = (segments - vmin) / (vmax - vmin)
+
+            return avg, segments
+
+        return avg, segments_valid
+
     return avg

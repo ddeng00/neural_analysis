@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from itertools import chain, product
-from typing import Any
+from itertools import product
+from typing import Any, NamedTuple
 
 import numpy as np
 import numpy.typing as npt
@@ -13,6 +13,11 @@ from tqdm import tqdm
 from ..partition import make_balanced_dichotomies
 from ..preprocess import remove_groups_missing_conditions, construct_pseudopopulation
 from ..utils import isin_2d
+
+
+class ScoreResult(NamedTuple):
+    metrics: pd.DataFrame
+    metadata: dict[str, Any]
 
 
 class _BaseEstimator(ABC):
@@ -117,7 +122,7 @@ class _BaseEstimator(ABC):
         self.verbose = verbose
         if verbose:
             prop_left = self.n_valid / self.n_init * 100
-            print(f"Remaining Units: {self.n_valid}/{self.n_init} ({prop_left:.1f}%)")
+            print(f"Remaining Units: {self.n_valid}/{self.n_init} ({prop_left:.1f}%, n={self.n_samples_per_cond})")
 
         # define dichotomies
         u_conds = data[condition].drop_duplicates().values
@@ -153,11 +158,12 @@ class _BaseEstimator(ABC):
         n_splits: int = 5,
         n_repeats: int = 1,
         shuffle: bool = False,
+        use_roc: bool = False,
         clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
         n_jobs: int | None = None,
-    ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+    ) -> ScoreResult:
         """
         Construct resampled pseudopopulations and compute scores for each dichotomy.
 
@@ -196,12 +202,13 @@ class _BaseEstimator(ABC):
         if self.verbose:
             results = list(
                 tqdm(
-                    Parallel(return_as="generator", n_jobs=n_jobs)(
+                    Parallel(return_as="generator", n_jobs=n_jobs, prefer="processes")(
                         delayed(self._score_helper)(
                             i,
                             n_splits,
                             n_repeats,
                             shuffle,
+                            use_roc,
                             clf,
                             clf_kwargs,
                             return_clfs,
@@ -210,15 +217,18 @@ class _BaseEstimator(ABC):
                         for i in range(n_resamples)
                     ),
                     total=n_resamples,
+                    desc=f"{self.__class__.__name__} scoring",
+                    unit="resample",
                 )
             )
         else:
-            results = Parallel(n_jobs=n_jobs)(
+            results = Parallel(n_jobs=n_jobs, prefer="processes")(
                 delayed(self._score_helper)(
                     i,
                     n_splits,
                     n_repeats,
                     shuffle,
+                    use_roc,
                     clf,
                     clf_kwargs,
                     return_clfs,
@@ -227,20 +237,52 @@ class _BaseEstimator(ABC):
                 for i in range(n_resamples)
             )
 
-        # return results
-        if not n_permutes:
-            results = pd.DataFrame.from_records(chain.from_iterable(results))
-            results = results.convert_dtypes()
-            return results
-        else:
-            results, null_results = zip(*results)
-            results = pd.DataFrame.from_records(chain.from_iterable(results))
-            null_results = pd.DataFrame.from_records(chain.from_iterable(null_results))
-            results, null_results = (
-                results.convert_dtypes(),
-                null_results.convert_dtypes(),
+        # combine observed and null draws; keep constant values in metadata
+        records = []
+        for result in results:
+            if n_permutes:
+                observed, null = result
+                records.extend(observed)
+                records.extend(null)
+            else:
+                records.extend(result)
+        metrics = pd.DataFrame.from_records(records).convert_dtypes()
+        columns = [
+            column
+            for column in (
+                "scores",
+                "dichotomy",
+                "named",
+                "resample",
+                "permutation",
+                "is_null",
+                "train",
+                "test",
+                "clfs",
             )
-            return results, null_results
+            if column in metrics
+        ]
+        metadata = {
+            "metric": self.__class__.__name__,
+            "n_resamples": n_resamples,
+            "n_permutes": n_permutes,
+            "n_splits": n_splits,
+            "n_repeats": n_repeats,
+            "shuffle": shuffle,
+            "n_samples_per_condition": self.n_samples_per_cond,
+            "n_units": self.n_valid,
+            "random_seed": self.random_seed,
+            "dichotomies": pd.DataFrame(
+                {
+                    "dichotomy": self.dichotomy_names,
+                    "named": ["unnamed" not in name for name in self.dichotomy_names],
+                    "difficulty": self.dichotomy_difficulties,
+                }
+            ),
+        }
+        if hasattr(self, "group"):
+            metadata["groups"] = tuple(self.group)
+        return ScoreResult(metrics[columns], metadata)
 
     def _score_helper(
         self,
@@ -248,6 +290,7 @@ class _BaseEstimator(ABC):
         n_splits: int,
         n_repeats: int,
         shuffle: bool,
+        use_roc: bool,
         clf: BaseEstimator,
         clf_kwargs: dict | None,
         return_clfs: bool,
@@ -255,7 +298,8 @@ class _BaseEstimator(ABC):
     ) -> list[pd.DataFrame] | tuple[list[pd.DataFrame], list[pd.DataFrame]]:
 
         # generate new random state
-        rs = np.random.RandomState(self.random_seed + i)
+        resample = i
+        rs = np.random.RandomState(self.random_seed + resample)
 
         # construct condition-balanced pseudopopulation of units
         X, condition = construct_pseudopopulation(
@@ -271,14 +315,15 @@ class _BaseEstimator(ABC):
 
         # fit and validate each dichotomy
         res = []
-        for i, dichot_name in enumerate(self.dichotomy_names):
+        for k, dichot_name in enumerate(self.dichotomy_names):
             d_res = self.__class__.validate(
                 X,
-                ys[i],
+                ys[k],
                 condition,
                 n_splits=n_splits,
                 n_repeats=n_repeats,
                 shuffle=shuffle,
+                use_roc=use_roc,
                 clf=clf,
                 clf_kwargs=clf_kwargs,
                 return_clfs=return_clfs,
@@ -286,29 +331,51 @@ class _BaseEstimator(ABC):
             )
             d_res["dichotomy"] = dichot_name
             d_res["named"] = "unnamed" not in dichot_name
+            d_res["resample"] = resample
+            d_res["permutation"] = None
+            d_res["is_null"] = False
             res.append(d_res)
         if n_permutes <= 0:
             return res
 
         # estimate permutation null
         res_perm = []
-        for _ in range(n_permutes):
-            X = self.__class__.shuffle(X, condition, rs)
-            for i, dichot_name in enumerate(self.dichotomy_names):
+        for permutation in range(n_permutes):
+            shuffle_in_validation = getattr(self, "shuffle_in_validation", False)
+            permute_labels = getattr(self, "permute_labels", False)
+            shuffle_each_dichotomy = getattr(self, "shuffle_each_dichotomy", False)
+            X_null = (
+                X
+                if shuffle_in_validation or permute_labels or shuffle_each_dichotomy
+                else self.__class__.shuffle(X, condition, rs)
+            )
+            for k, dichot_name in enumerate(self.dichotomy_names):
+                Xi = (
+                    self.__class__.shuffle(X, condition, rs)
+                    if shuffle_each_dichotomy
+                    else X_null
+                )
+                yi = rs.permutation(ys[k]) if permute_labels else ys[k]
+                extra = {"permute": True} if shuffle_in_validation else {}
                 d_res = self.__class__.validate(
-                    X,
-                    ys[i],
-                    condition,
+                    Xi,
+                    yi,
+                    None if permute_labels else condition,
                     n_splits=n_splits,
                     n_repeats=n_repeats,
                     shuffle=shuffle,
+                    use_roc=use_roc,
                     clf=clf,
                     clf_kwargs=clf_kwargs,
                     return_clfs=return_clfs,
                     random_state=rs,
+                    **extra,
                 )
                 d_res["dichotomy"] = dichot_name
                 d_res["named"] = "unnamed" not in dichot_name
+                d_res["resample"] = resample
+                d_res["permutation"] = permutation
+                d_res["is_null"] = True
                 res_perm.append(d_res)
 
         return res, res_perm
@@ -323,6 +390,7 @@ class _BaseEstimator(ABC):
         n_splits: int = 5,
         n_repeats: int = 1,
         shuffle: bool = False,
+        use_roc: bool = False,
         clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
@@ -448,6 +516,7 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         n_splits: int,
         n_repeats: int,
         shuffle: bool,
+        use_roc: bool,
         clf: BaseEstimator,
         clf_kwargs: dict | None,
         return_clfs: bool,
@@ -455,7 +524,8 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
     ) -> list[pd.DataFrame] | tuple[list[pd.DataFrame], list[pd.DataFrame]]:
 
         # generate new random state
-        rs = np.random.RandomState(self.random_seed + i)
+        resample = i
+        rs = np.random.RandomState(self.random_seed + resample)
 
         # construct condition-balanced pseudopopulation of units
         Xs, condition = construct_pseudopopulation(
@@ -481,6 +551,7 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
                     n_splits=n_splits,
                     n_repeats=n_repeats,
                     shuffle=shuffle,
+                    use_roc=use_roc,
                     clf=clf,
                     clf_kwargs=clf_kwargs,
                     return_clfs=return_clfs,
@@ -490,24 +561,30 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
                 d_res["named"] = "unnamed" not in dichot_name
                 d_res["train"] = self.response[i]
                 d_res["test"] = self.response[j]
+                d_res["resample"] = resample
+                d_res["permutation"] = None
+                d_res["is_null"] = False
                 res.append(d_res)
         if n_permutes <= 0:
             return res
 
         # estimate permutation null
         res_perm = []
-        for _ in range(n_permutes):
-            Xs = self.shuffle(Xs, condition, rs)
+        for permutation in range(n_permutes):
+            permute_labels = getattr(self, "permute_labels", False)
+            Xs_null = Xs if permute_labels else self.shuffle(Xs, condition, rs)
             for k, dichot_name in enumerate(self.dichotomy_names):
+                y_null = rs.permutation(ys[k]) if permute_labels else ys[k]
                 for i, j in product(range(len(self.response)), repeat=2):
                     d_res = self.__class__.validate(
-                        Xs[i],
-                        Xs[j],
-                        ys[k],
-                        condition,
+                        Xs_null[i],
+                        Xs_null[j],
+                        y_null,
+                        None if permute_labels else condition,
                         n_splits=n_splits,
                         n_repeats=n_repeats,
                         shuffle=shuffle,
+                        use_roc=use_roc,
                         clf=clf,
                         clf_kwargs=clf_kwargs,
                         return_clfs=return_clfs,
@@ -517,6 +594,9 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
                     d_res["named"] = "unnamed" not in dichot_name
                     d_res["train"] = self.response[i]
                     d_res["test"] = self.response[j]
+                    d_res["resample"] = resample
+                    d_res["permutation"] = permutation
+                    d_res["is_null"] = True
                     res_perm.append(d_res)
 
         return res, res_perm
@@ -532,6 +612,7 @@ class _BaseRelatedSamplesGeneralizer(_BaseEstimator):
         n_splits: int = 5,
         n_repeats: int = 1,
         shuffle: bool = False,
+        use_roc: bool = False,
         clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
@@ -674,7 +755,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
 
         # define dichotomies
         dichots, dichot_names, dichot_diffs = make_balanced_dichotomies(
-            u_conds, cond_names=condition, return_one_sided=True
+            u_conds, cond_names=condition, return_one_sided=True, named_only=named_only
         )
         self.dichotomies = dichots
         self.dichotomy_names = dichot_names
@@ -687,19 +768,6 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                     if all(isin_2d(d, dichot)) or not any(isin_2d(d, dichot)):
                         self.dichotomy_names[i] = dichot_name
                         break
-
-        # remove irrelevant dichotomies
-        if named_only:
-            sel_inds = [
-                i
-                for i, name in enumerate(self.dichotomy_names)
-                if "unnamed" not in name
-            ]
-            self.dichotomies = [self.dichotomies[i] for i in sel_inds]
-            self.dichotomy_names = [self.dichotomy_names[i] for i in sel_inds]
-            self.dichotomy_difficulties = [
-                self.dichotomy_difficulties[i] for i in sel_inds
-            ]
 
         # store data
         self.data = data
@@ -716,6 +784,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         n_splits: int | dict[Any, int] = 5,
         n_repeats: int | dict[Any, int] = 1,
         shuffle: bool | dict[Any, bool] = False,
+        use_roc: bool = False,
         clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
@@ -742,6 +811,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
             n_splits=n_splits,
             n_repeats=n_repeats,
             shuffle=shuffle,
+            use_roc=use_roc,
             clf=clf,
             clf_kwargs=clf_kwargs,
             return_clfs=return_clfs,
@@ -769,6 +839,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         n_splits: list[int],
         n_repeats: list[int],
         shuffle: list[bool],
+        use_roc: bool,
         clf: BaseEstimator,
         clf_kwargs: dict | None,
         return_clfs: bool,
@@ -776,7 +847,8 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
     ) -> list[pd.DataFrame] | tuple[list[pd.DataFrame], list[pd.DataFrame]]:
 
         # generate new random state
-        rs = np.random.RandomState(self.random_seed + i)
+        resample = i
+        rs = np.random.RandomState(self.random_seed + resample)
 
         # construct condition-balanced pseudopopulation of units
         Xs, conditions = [], []
@@ -814,6 +886,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                     n_splits=n_splits[i],
                     n_repeats=n_repeats[i],
                     shuffle=shuffle[i],
+                    use_roc=use_roc,
                     clf=clf,
                     clf_kwargs=clf_kwargs,
                     return_clfs=return_clfs,
@@ -823,13 +896,23 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                 d_res["named"] = "unnamed" not in dichot_name
                 d_res["train"] = self.group[i]
                 d_res["test"] = self.group[j]
+                d_res["resample"] = resample
+                d_res["permutation"] = None
+                d_res["is_null"] = False
                 res.append(d_res)
         if n_permutes <= 0:
             return res
 
         # estimate permutation null
         res_perm = []
-        for _ in range(n_permutes):
+        for permutation in range(n_permutes):
+            permute_labels = getattr(self, "permute_labels", False)
+            shuffle_in_validation = getattr(self, "shuffle_in_validation", False)
+            ys_null = (
+                [[rs.permutation(y) for y in group_ys] for group_ys in ys]
+                if permute_labels
+                else ys
+            )
             for i, j in product(range(len(self.data)), repeat=2):
                 if n_splits[i] == 0:
                     continue
@@ -843,31 +926,56 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
                 #     X_ij = self.shuffle(X_ij, c_ij, rs)
                 #     Xi = X_ij[: len(Xs[i])]
                 #     Xj = X_ij[len(Xs[i]) :]
-                Xi, Xj = self._shuffle_pair(
-                    Xs[i], conditions[i], Xs[j], conditions[j], rs, same_group=i == j
-                )
+                if permute_labels or shuffle_in_validation:
+                    Xi, Xj = Xs[i], Xs[j]
+                else:
+                    Xi, Xj = self._shuffle_pair(
+                        Xs[i],
+                        conditions[i],
+                        Xs[j],
+                        conditions[j],
+                        rs,
+                        same_group=i == j,
+                    )
 
                 for k, dichot_name in enumerate(self.dichotomy_names):
+                    if shuffle_in_validation:
+                        seed = (
+                            self.random_seed
+                            + 1_000_003 * (resample + 1)
+                            + 10_009 * (permutation + 1)
+                            + 101 * i
+                            + k
+                        ) % np.iinfo(np.int32).max
+                        validation_state = np.random.RandomState(seed)
+                    else:
+                        validation_state = rs
+                    extra = {"permute": True} if shuffle_in_validation else {}
                     d_res = self.__class__.validate(
                         Xi,
                         Xj,
-                        ys[i][k],
-                        ys[j][k],
-                        conditions[i],
-                        conditions[j],
+                        ys_null[i][k],
+                        ys_null[j][k],
+                        None if permute_labels else conditions[i],
+                        None if permute_labels else conditions[j],
                         same_group=i == j,
                         n_splits=n_splits[i],
                         n_repeats=n_repeats[i],
                         shuffle=shuffle[i],
+                        use_roc=use_roc,
                         clf=clf,
                         clf_kwargs=clf_kwargs,
                         return_clfs=return_clfs,
-                        random_state=rs,
+                        random_state=validation_state,
+                        **extra,
                     )
                     d_res["dichotomy"] = dichot_name
                     d_res["named"] = "unnamed" not in dichot_name
                     d_res["train"] = self.group[i]
                     d_res["test"] = self.group[j]
+                    d_res["resample"] = resample
+                    d_res["permutation"] = permutation
+                    d_res["is_null"] = True
                     res_perm.append(d_res)
 
         return res, res_perm
@@ -886,6 +994,7 @@ class _BaseIndependentSamplesGeneralizer(_BaseEstimator):
         n_splits: int = 5,
         n_repeats: int = 1,
         shuffle: bool = False,
+        use_roc: bool = False,
         clf: BaseEstimator = LinearSVC,
         clf_kwargs: dict | None = None,
         return_clfs: bool = False,
